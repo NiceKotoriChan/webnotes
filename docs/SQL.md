@@ -1,6 +1,23 @@
-每个 repo 一个数据库文件（repos/<repo>.db），schema 如下：
+## index.db schema
 
-附件无元数据库：MIME 响应时嗅探，size 用 os.Stat，文件是否存在即去重依据。
+```sql
+PRAGMA journal_mode = WAL;
+
+-- 附件元数据 + 上传状态：sha256 主键即文件名，存储路径 assets/<前2位>/<第3-4位>/<id>
+-- 单表状态机：(空) → uploading → ready → deleting → (DELETE 行)
+-- assets 表里的都是完整内容，不包含 tmp 文件
+CREATE TABLE assets (
+    id     TEXT PRIMARY KEY,                -- sha256
+    name   TEXT NOT NULL,                  -- 原始文件名（Content-Disposition 下载名）
+    mime   TEXT NOT NULL,
+    size   INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'uploading'
+           CHECK (status IN ('uploading','ready','deleting')),
+    ctime  INTEGER NOT NULL                -- Unix 毫秒
+);
+```
+
+## repo db schema
 
 ```sql
 PRAGMA journal_mode = WAL;
@@ -8,7 +25,7 @@ PRAGMA foreign_keys = ON;
 
 -- 笔记：正文直接存库，保存 = 单事务，无文件/数据库一致性问题
 CREATE TABLE notes (
-    id      TEXT PRIMARY KEY,                -- UUIDv7
+    id      TEXT PRIMARY KEY,                -- UUIDv4
     title   TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',        -- Markdown 正文
     ctime   INTEGER NOT NULL,                -- Unix 毫秒
@@ -42,17 +59,18 @@ CREATE TRIGGER notes_au AFTER UPDATE ON notes BEGIN
     VALUES (new.rowid, new.title, new.content);
 END;
 
--- 标签：扁平结构，name 即主键
+-- 标签：扁平结构，UUID 主键
 CREATE TABLE tags (
-    name TEXT PRIMARY KEY
+    id      TEXT PRIMARY KEY,                -- UUIDv4
+    name    TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE note_tags (
-    note_id  TEXT NOT NULL REFERENCES notes(id)  ON DELETE CASCADE,
-    tag_name TEXT NOT NULL REFERENCES tags(name) ON DELETE CASCADE ON UPDATE CASCADE,
-    PRIMARY KEY (note_id, tag_name)
+    note_id  TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    tag_id   TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (note_id, tag_id)
 );
-CREATE INDEX idx_note_tags_tag ON note_tags(tag_name);
+CREATE INDEX idx_note_tags_tag ON note_tags(tag_id);
 
 -- 笔记间引用：独立边表，用户显式维护，不解析/不干涉正文
 -- source 引用 target；反向链接 = WHERE target_id = ?
@@ -64,15 +82,6 @@ CREATE TABLE refs (
     CHECK (source_id != target_id)
 );
 CREATE INDEX idx_refs_target ON refs(target_id);
-
--- 附件关联：sha256 对应全局 assets/ 目录下的内容寻址文件
--- （附件无元数据库，不做 FK 约束，孤儿文件由全局 GC 回收）
-CREATE TABLE note_assets (
-    note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    sha256  TEXT NOT NULL,
-    PRIMARY KEY (note_id, sha256)
-);
-CREATE INDEX idx_note_assets_sha ON note_assets(sha256);
 ```
 
 FTS 查询示例：
