@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -46,12 +47,15 @@ func (s *Server) listNotes(c *gin.Context) {
 		limit = 100
 	}
 
+	// trigram tokenizer 需要 ≥3 个 Unicode 字符才能匹配
+	// 短查询降级到 LIKE，避免 2 字搜索返空
+	useFTS := q != "" && utf8.RuneCountInString(q) >= 3
 	var (
 		rows *sql.Rows
 		err  error
 	)
 	switch {
-	case q != "" && tagID != "":
+	case useFTS && tagID != "":
 		rows, err = db.Query(`
 			SELECT n.id, n.title, n.content, n.ctime, n.mtime
 			FROM notes_fts f
@@ -60,7 +64,7 @@ func (s *Server) listNotes(c *gin.Context) {
 			WHERE notes_fts MATCH ? AND nt.tag_id = ?
 			ORDER BY f.rank
 			LIMIT ? OFFSET ?`, q, tagID, limit, offset)
-	case q != "":
+	case useFTS:
 		rows, err = db.Query(`
 			SELECT n.id, n.title, n.content, n.ctime, n.mtime
 			FROM notes_fts f
@@ -68,6 +72,23 @@ func (s *Server) listNotes(c *gin.Context) {
 			WHERE notes_fts MATCH ?
 			ORDER BY f.rank
 			LIMIT ? OFFSET ?`, q, limit, offset)
+	case q != "" && tagID != "":
+		like := "%" + q + "%"
+		rows, err = db.Query(`
+			SELECT n.id, n.title, n.content, n.ctime, n.mtime
+			FROM notes n
+			JOIN note_tags nt ON nt.note_id = n.id
+			WHERE (n.title LIKE ? OR n.content LIKE ?) AND nt.tag_id = ?
+			ORDER BY n.mtime DESC
+			LIMIT ? OFFSET ?`, like, like, tagID, limit, offset)
+	case q != "":
+		like := "%" + q + "%"
+		rows, err = db.Query(`
+			SELECT id, title, content, ctime, mtime
+			FROM notes
+			WHERE title LIKE ? OR content LIKE ?
+			ORDER BY mtime DESC
+			LIMIT ? OFFSET ?`, like, like, limit, offset)
 	case tagID != "":
 		rows, err = db.Query(`
 			SELECT n.id, n.title, n.content, n.ctime, n.mtime
