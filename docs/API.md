@@ -1,5 +1,5 @@
 ## 约定
-;
+
 - Base path: `/api`
 - 时间戳：Unix 毫秒（INTEGER）
 - 字段命名：snake_case
