@@ -1,84 +1,66 @@
 package api
 
 import (
+	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"webnotes/server/store"
 )
 
+// GET /api/repos
 func (s *Server) listRepos(c *gin.Context) {
-	ids, err := s.store.ListRepos()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, ids)
+	c.JSON(http.StatusOK, s.store.ListRepos())
 }
 
-// POST /api/repos  body: { "id": "work" }
-// 创建空 db 文件 + 初始化 schema；已存在返 409
+// POST /api/repos  body: { name }  → 服务端生成 UUID
 func (s *Server) createRepo(c *gin.Context) {
 	var body struct {
-		ID string `json:"id"`
+		Name string `json:"name"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	id := body.ID
-	if !validRepoID(id) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid repo id"})
-		return
-	}
-	if exists, err := repoExists(s.store.RepoPath(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	} else if exists {
-		c.JSON(http.StatusConflict, gin.H{"error": "repo exists"})
-		return
-	}
-	db, err := s.store.OpenRepo(id)
+	info, err := s.store.CreateRepo(body.Name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	db.Close()
-	c.Status(http.StatusNoContent)
+	c.JSON(http.StatusCreated, info)
 }
 
+// PATCH /api/repos/:repo  body: { name }  改名（不动目录/链接）
+func (s *Server) renameRepo(c *gin.Context) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	info, err := s.store.RenameRepo(c.Param("repo"), body.Name)
+	if errors.Is(err, store.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "repo not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, info)
+}
+
+// DELETE /api/repos/:repo  删除整个仓库目录
 func (s *Server) deleteRepo(c *gin.Context) {
-	repo := c.Param("repo")
-	if err := s.store.DeleteRepo(repo); err != nil {
+	if err := s.store.DeleteRepo(c.Param("repo")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "repo not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.Status(http.StatusNoContent)
-}
-
-// validRepoID 禁止路径穿越字符与扩展名
-func validRepoID(id string) bool {
-	if id == "" || len(id) > 64 {
-		return false
-	}
-	if strings.ContainsAny(id, `/\..`) {
-		return false
-	}
-	return true
-}
-
-func repoExists(path string) (bool, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return false, err
-	}
-	// 三个后缀任一存在即视为 repo 已存在
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if _, err := os.Stat(abs + suffix); err == nil {
-			return true, nil
-		}
-	}
-	return false, nil
 }

@@ -1,51 +1,225 @@
-// Package store 管理 index.db 与 repos/ 下的 repo db
+// Package store 管理 webnotes/ 根目录：repos.json 索引与各仓库自包含目录。
+// 每个仓库是 <root>/<uuid>/ 目录，内含 data.db 与私有 assets/。
 package store
 
 import (
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
-type Store struct {
-	DataDir string
-	IndexDB *sql.DB
+// ErrNotFound 仓库或记录不存在
+var ErrNotFound = errors.New("not found")
+
+// RepoInfo repos.json 中的一条索引
+type RepoInfo struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	CTime int64  `json:"ctime"`
 }
 
-func New(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Join(dataDir, "repos"), 0o755); err != nil {
+type Store struct {
+	Root  string
+	mu    sync.Mutex
+	repos []RepoInfo
+}
+
+func New(root string) (*Store, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "assets", "tmp"), 0o755); err != nil {
-		return nil, err
-	}
-	indexDB, err := openDB(filepath.Join(dataDir, "index.db"))
-	if err != nil {
-		return nil, err
-	}
-	s := &Store{DataDir: dataDir, IndexDB: indexDB}
-	if err := s.ensureIndexSchema(); err != nil {
+	s := &Store{Root: root}
+	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
+// reconcile 启动对账：目录为真相源，repos.json 仅索引。
+// 目录有/json 无 → 补（name 回退"未命名"）；json 有/目录无 → 丢弃。
+func (s *Store) reconcile() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	indexed := map[string]RepoInfo{}
+	if data, err := os.ReadFile(s.indexPath()); err == nil {
+		var list []RepoInfo
+		if json.Unmarshal(data, &list) == nil {
+			for _, r := range list {
+				indexed[r.ID] = r
+			}
+		}
+	}
+
+	entries, _ := os.ReadDir(s.Root)
+	merged := []RepoInfo{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		id := e.Name()
+		if _, err := uuid.Parse(id); err != nil {
+			continue // 只认 UUID 目录
+		}
+		if _, err := os.Stat(filepath.Join(s.Root, id, "data.db")); err != nil {
+			continue
+		}
+		if info, ok := indexed[id]; ok {
+			merged = append(merged, info)
+		} else {
+			merged = append(merged, RepoInfo{ID: id, Name: "未命名"})
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].CTime < merged[j].CTime })
+	s.repos = merged
+	return s.saveLocked()
+}
+
+// saveLocked 原子重写 repos.json（tmp → fsync → rename）。调用方需持锁。
+func (s *Store) saveLocked() error {
+	data, err := json.MarshalIndent(s.repos, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := s.indexPath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if f, err := os.Open(tmp); err == nil {
+		f.Sync()
+		f.Close()
+	}
+	return os.Rename(tmp, s.indexPath())
+}
+
+func (s *Store) indexPath() string { return filepath.Join(s.Root, "repos.json") }
+
+// RepoDir 返回仓库目录 <root>/<id>
+func (s *Store) RepoDir(id string) string { return filepath.Join(s.Root, id) }
+
+func (s *Store) ListRepos() []RepoInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]RepoInfo, len(s.repos))
+	copy(out, s.repos)
+	return out
+}
+
+// CreateRepo 生成 UUID、建目录与 data.db、写入索引
+func (s *Store) CreateRepo(name string) (*RepoInfo, error) {
+	id := uuid.NewString()
+	dir := s.RepoDir(id)
+	if err := os.MkdirAll(filepath.Join(dir, "assets", "tmp"), 0o755); err != nil {
+		return nil, err
+	}
+	db, err := openDB(filepath.Join(dir, "data.db"))
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	if _, err := db.Exec(RepoSchema); err != nil {
+		db.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	db.Close()
+
+	info := RepoInfo{ID: id, Name: name, CTime: time.Now().UnixMilli()}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repos = append(s.repos, info)
+	if err := s.saveLocked(); err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	return &info, nil
+}
+
+// RenameRepo 只改索引里的 name，目录与链接不动
+func (s *Store) RenameRepo(id, name string) (*RepoInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.repos {
+		if s.repos[i].ID == id {
+			s.repos[i].Name = name
+			if err := s.saveLocked(); err != nil {
+				return nil, err
+			}
+			r := s.repos[i]
+			return &r, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+// DeleteRepo 删除整个仓库目录并从索引移除
+func (s *Store) DeleteRepo(id string) error {
+	if _, err := uuid.Parse(id); err != nil {
+		return ErrNotFound
+	}
+	if err := os.RemoveAll(s.RepoDir(id)); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.repos[:0]
+	for _, r := range s.repos {
+		if r.ID != id {
+			kept = append(kept, r)
+		}
+	}
+	s.repos = kept
+	return s.saveLocked()
+}
+
+// OpenRepo 打开已有仓库的 data.db 并确保 schema；仓库不存在返回 ErrNotFound（不会新建空库）
+func (s *Store) OpenRepo(id string) (*sql.DB, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return nil, ErrNotFound
+	}
+	dbPath := filepath.Join(s.RepoDir(id), "data.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	db, err := openDB(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(RepoSchema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
 func openDB(path string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)", path)
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
+	// SQLite 单写者；串行连接避免同文件多连接争锁
+	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
 	return db, nil
 }
 
-const indexSchema = `
+// RepoSchema 每个仓库 data.db 的结构，与 docs/data.sql 保持一致
+const RepoSchema = `
 CREATE TABLE IF NOT EXISTS assets (
     id     TEXT PRIMARY KEY,
     name   TEXT NOT NULL,
@@ -54,17 +228,18 @@ CREATE TABLE IF NOT EXISTS assets (
     status TEXT NOT NULL DEFAULT 'uploading'
            CHECK (status IN ('uploading','ready','deleting')),
     ctime  INTEGER NOT NULL
-);`
-
-const RepoSchema = `
-CREATE TABLE IF NOT EXISTS notes (
-    id      TEXT PRIMARY KEY,
-    title   TEXT NOT NULL DEFAULT '',
-    content TEXT NOT NULL DEFAULT '',
-    ctime   INTEGER NOT NULL,
-    mtime   INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_notes_mtime ON notes(mtime DESC);
+
+CREATE TABLE IF NOT EXISTS notes (
+    id        TEXT PRIMARY KEY,
+    parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
+    title     TEXT NOT NULL DEFAULT '',
+    content   TEXT NOT NULL DEFAULT '',
+    ctime     INTEGER NOT NULL,
+    mtime     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_parent ON notes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_notes_mtime  ON notes(mtime DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     title, content,
@@ -88,65 +263,7 @@ CREATE TABLE IF NOT EXISTS tags (
 );
 CREATE TABLE IF NOT EXISTS note_tags (
     note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    tag_id  TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    tag_id  TEXT NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
     PRIMARY KEY (note_id, tag_id)
 );
-CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id);
-
-CREATE TABLE IF NOT EXISTS refs (
-    source_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    target_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    ctime     INTEGER NOT NULL,
-    PRIMARY KEY (source_id, target_id),
-    CHECK (source_id != target_id)
-);
-CREATE INDEX IF NOT EXISTS idx_refs_target ON refs(target_id);`
-
-func (s *Store) ensureIndexSchema() error {
-	_, err := s.IndexDB.Exec(indexSchema)
-	return err
-}
-
-// RepoPath 返回 repos/<id>.db
-func (s *Store) RepoPath(id string) string {
-	return filepath.Join(s.DataDir, "repos", id+".db")
-}
-
-// OpenRepo 打开（必要时创建）repo db 并确保 schema
-func (s *Store) OpenRepo(id string) (*sql.DB, error) {
-	db, err := openDB(s.RepoPath(id))
-	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(RepoSchema); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return db, nil
-}
-
-// ListRepos 扫描 repos/ 目录下的 *.db
-func (s *Store) ListRepos() ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(s.DataDir, "repos"))
-	if err != nil {
-		return nil, err
-	}
-	var ids []string
-	for _, e := range entries {
-		if name := e.Name(); filepath.Ext(name) == ".db" {
-			ids = append(ids, name[:len(name)-3])
-		}
-	}
-	return ids, nil
-}
-
-// DeleteRepo 删除 repo db 文件（含 WAL/SHM）
-func (s *Store) DeleteRepo(id string) error {
-	base := s.RepoPath(id)
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(base + suffix); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
-}
+CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id);`

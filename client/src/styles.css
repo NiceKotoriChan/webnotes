@@ -1,23 +1,71 @@
+/* 配色对齐 GitHub（与 Markdown 预览的 github-markdown-css 同一套色板） */
 :root {
-  --bg: #ffffff;
-  --fg: #1f2937;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --accent: #2563eb;
+  --bg: #f6f8fa;
+  --card: #ffffff;
+  --overlay: #ffffff;
+  --input-bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #656d76;
+  --border: #d0d7de;
+  --accent: #1f6feb; /* 主按钮背景 */
+  --accent-hover: #1a63d8;
   --accent-fg: #ffffff;
+  --accent-text: #0969da; /* 链接、选中态文字 */
+  --accent-soft: rgba(9, 105, 218, 0.08);
   --hover: #f3f4f6;
-  --danger: #dc2626;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hover-strong: #eaeef2;
+  --danger: #cf222e;
+  --danger-soft: rgba(207, 34, 46, 0.1);
+  /* 卡片两级阴影：静止/悬停上浮 */
+  --shadow-card:
+    0 1px 2px rgba(31, 35, 40, 0.06), 0 2px 8px rgba(31, 35, 40, 0.06);
+  --shadow-card-hover:
+    0 8px 24px rgba(31, 35, 40, 0.14), 0 2px 6px rgba(31, 35, 40, 0.08);
+  --shadow-pop:
+    0 12px 28px rgba(31, 35, 40, 0.18), 0 4px 10px rgba(31, 35, 40, 0.1);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
   font-size: 14px;
   color: var(--fg);
   background: var(--bg);
+}
+
+/* 暗色 = GitHub Dark：三级层级 页面底 #010409 → 卡片 #0d1117 → 浮层 #161b22 */
+.dark {
+  --bg: #010409;
+  --card: #0d1117;
+  --overlay: #161b22;
+  --input-bg: #010409;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --border: #30363d;
+  --accent: #1f6feb;
+  --accent-hover: #388bfd;
+  --accent-fg: #ffffff;
+  --accent-text: #4493f8;
+  --accent-soft: rgba(56, 139, 253, 0.15);
+  --hover: #161b22;
+  --hover-strong: #30363d;
+  --danger: #f85149;
+  --danger-soft: rgba(248, 81, 73, 0.15);
+  --shadow-card: 0 1px 3px rgba(1, 4, 9, 0.6);
+  --shadow-card-hover:
+    0 12px 28px rgba(1, 4, 9, 0.85), 0 3px 10px rgba(1, 4, 9, 0.6);
+  --shadow-pop: 0 14px 32px rgba(1, 4, 9, 0.9), 0 4px 10px rgba(1, 4, 9, 0.7);
 }
 
 * {
   box-sizing: border-box;
 }
 
-html, body, #app {
+html,
+body,
+#app {
   margin: 0;
   height: 100%;
 }
@@ -27,38 +75,101 @@ body {
   flex-direction: column;
 }
 
+/* 卡片基底：圆角 + 阴影；hover 仅加深阴影（浮层 popover 除外，它保持自身阴影） */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.18s ease;
+}
+.card:not(.popover):hover {
+  box-shadow: var(--shadow-card-hover);
+}
+.popover {
+  background: var(--overlay);
+  box-shadow: var(--shadow-pop);
+}
+
 button {
   font: inherit;
   color: var(--fg);
   background: var(--hover);
   border: 1px solid var(--border);
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
 }
-button:hover { background: #e5e7eb; }
+button:hover {
+  background: var(--hover-strong);
+}
 button.primary {
   color: var(--accent-fg);
   background: var(--accent);
   border-color: var(--accent);
 }
-button.primary:hover { background: #1d4ed8; }
+button.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+button.small {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+button.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--muted);
+}
+button.icon-btn:hover {
+  color: var(--fg);
+}
 button.danger {
   color: var(--danger);
   background: transparent;
   border-color: transparent;
 }
-button.danger:hover { background: #fee2e2; }
+button.danger:hover {
+  background: var(--danger-soft);
+}
 
-input, textarea {
+input,
+textarea {
   font: inherit;
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 4px 8px;
   outline: none;
+  background: var(--input-bg);
 }
-input:focus, textarea:focus { border-color: var(--accent); }
+input:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Markdown 渲染样式由 github-markdown-css 提供（.markdown-body），明暗主题按 link 切换 */
+.markdown-body {
+  background: transparent !important;
+  font-size: 14px;
+}
+.markdown-body img {
+  max-width: 100%;
+}
+/* 暗色下卡片是 #161b22，让代码块下沉一层，与 GitHub 画布层级一致 */
+.dark .markdown-body pre,
+.dark .markdown-body .highlight {
+  background-color: var(--bg) !important;
+}

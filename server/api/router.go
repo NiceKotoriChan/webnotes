@@ -2,6 +2,10 @@
 package api
 
 import (
+	"database/sql"
+	"errors"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
 	"webnotes/server/asset"
@@ -17,42 +21,53 @@ func NewRouter(s *store.Store, a *asset.Store) *gin.Engine {
 	r := gin.Default()
 	srv := &Server{store: s, assets: a}
 
-	api := r.Group("/api")
+	g := r.Group("/api")
 	{
 		// Repos
-		api.GET("/repos", srv.listRepos)
-		api.POST("/repos", srv.createRepo)
-		api.DELETE("/repos/:repo", srv.deleteRepo)
+		g.GET("/repos", srv.listRepos)
+		g.POST("/repos", srv.createRepo)
+		g.PATCH("/repos/:repo", srv.renameRepo)
+		g.DELETE("/repos/:repo", srv.deleteRepo)
 
-		// Notes
-		api.GET("/repos/:repo/notes", srv.listNotes)
-		api.POST("/repos/:repo/notes", srv.createNote)
-		api.GET("/repos/:repo/notes/:id", srv.getNote)
-		api.PUT("/repos/:repo/notes/:id", srv.updateNote)
-		api.DELETE("/repos/:repo/notes/:id", srv.deleteNote)
+		// Notes（树形）
+		g.GET("/repos/:repo/notes", srv.listNotes)
+		g.POST("/repos/:repo/notes", srv.createNote)
+		g.GET("/repos/:repo/notes/:id", srv.getNote)
+		g.PUT("/repos/:repo/notes/:id", srv.updateNote)
+		g.PATCH("/repos/:repo/notes/:id", srv.moveNote)
+		g.DELETE("/repos/:repo/notes/:id", srv.deleteNote)
 
 		// Tags
-		api.GET("/repos/:repo/tags", srv.listTags)
-		api.POST("/repos/:repo/tags", srv.createTag)
-		api.PUT("/repos/:repo/tags/:id", srv.renameTag)
-		api.DELETE("/repos/:repo/tags/:id", srv.deleteTag)
+		g.GET("/repos/:repo/tags", srv.listTags)
+		g.POST("/repos/:repo/tags", srv.createTag)
+		g.PUT("/repos/:repo/tags/:id", srv.renameTag)
+		g.DELETE("/repos/:repo/tags/:id", srv.deleteTag)
 
-		// Note-Tag
-		api.GET("/repos/:repo/notes/:id/tags", srv.listNoteTags)
-		api.POST("/repos/:repo/notes/:id/tags", srv.addNoteTag)
-		api.DELETE("/repos/:repo/notes/:id/tags/:tag_id", srv.removeNoteTag)
+		// Note-Tag 关联
+		g.GET("/repos/:repo/notes/:id/tags", srv.listNoteTags)
+		g.POST("/repos/:repo/notes/:id/tags", srv.addNoteTag)
+		g.DELETE("/repos/:repo/notes/:id/tags/:tag_id", srv.removeNoteTag)
 
-		// Refs
-		api.GET("/repos/:repo/notes/:id/refs", srv.listRefs)
-		api.GET("/repos/:repo/notes/:id/backrefs", srv.listBackrefs)
-		api.POST("/repos/:repo/notes/:id/refs", srv.createRef)
-		api.DELETE("/repos/:repo/notes/:id/refs/:target_id", srv.deleteRef)
-
-		// Assets
-		api.HEAD("/assets/:sha", srv.headAsset)
-		api.POST("/assets/:sha", srv.uploadAsset)
-		api.GET("/assets/:sha", srv.getAsset)
-		api.DELETE("/assets/:sha", srv.deleteAsset)
+		// Assets（仓库内私有）
+		g.HEAD("/repos/:repo/assets/:sha", srv.headAsset)
+		g.POST("/repos/:repo/assets/:sha", srv.uploadAsset)
+		g.GET("/repos/:repo/assets/:sha", srv.getAsset)
+		g.DELETE("/repos/:repo/assets/:sha", srv.deleteAsset)
 	}
 	return r
+}
+
+// openRepo 打开路径参数指定的仓库，返回 db 与目录；失败已写响应
+func (s *Server) openRepo(c *gin.Context) (*sql.DB, string, bool) {
+	repo := c.Param("repo")
+	db, err := s.store.OpenRepo(repo)
+	if errors.Is(err, store.ErrNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "repo not found"})
+		return nil, "", false
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return nil, "", false
+	}
+	return db, s.store.RepoDir(repo), true
 }

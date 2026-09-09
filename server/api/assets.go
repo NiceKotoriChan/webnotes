@@ -15,10 +15,16 @@ import (
 	"webnotes/server/asset"
 )
 
-// HEAD /api/assets/:sha — 检查是否 ready
+// HEAD /api/repos/:repo/assets/:sha — 检查是否 ready
 func (s *Server) headAsset(c *gin.Context) {
+	db, _, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
 	sha := c.Param("sha")
-	st, err := s.assets.Status(sha)
+	st, err := s.assets.Status(db, sha)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -30,9 +36,15 @@ func (s *Server) headAsset(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
-// POST /api/assets/:sha — 上传
+// POST /api/repos/:repo/assets/:sha — 上传
 // Headers: X-Name, X-Mime, X-Size；Body: 原始字节
 func (s *Server) uploadAsset(c *gin.Context) {
+	db, dir, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
 	sha := c.Param("sha")
 	if !validSha256(sha) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid sha256"})
@@ -54,26 +66,26 @@ func (s *Server) uploadAsset(c *gin.Context) {
 	}
 
 	// 已 ready → 秒传
-	if st, _ := s.assets.Status(sha); st == "ready" {
+	if st, _ := s.assets.Status(db, sha); st == "ready" {
 		c.Status(http.StatusNoContent)
 		return
 	}
 
-	// INSERT uploading；冲突说明已 ready 或正在上传
-	ok, err := s.assets.InsertUploading(sha, name, contentType, size, time.Now().UnixMilli())
+	// INSERT uploading；冲突说明已存在或正在上传
+	ok2, err := s.assets.InsertUploading(db, sha, name, contentType, size, time.Now().UnixMilli())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if !ok {
+	if !ok2 {
 		c.JSON(http.StatusConflict, gin.H{"error": "asset exists or upload in progress"})
 		return
 	}
 
 	// 流式接收 body → tmp → 校验 → rename → ready
-	if err := s.assets.Save(sha, name, contentType, size, c.Request.Body); err != nil {
+	if err := s.assets.Save(db, dir, sha, name, contentType, size, c.Request.Body); err != nil {
 		if errors.Is(err, asset.ErrShaMismatch) {
-			s.assets.CleanupUploading(sha)
+			s.assets.CleanupUploading(db, sha)
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -81,7 +93,7 @@ func (s *Server) uploadAsset(c *gin.Context) {
 		return
 	}
 
-	m, err := s.assets.Metadata(sha)
+	m, err := s.assets.Metadata(db, sha)
 	if err != nil || m == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "fetch metadata"})
 		return
@@ -89,11 +101,16 @@ func (s *Server) uploadAsset(c *gin.Context) {
 	c.JSON(http.StatusCreated, m)
 }
 
-// GET /api/assets/:sha — 下载
-// ?inline=1 → Content-Disposition: inline
+// GET /api/repos/:repo/assets/:sha — 下载；?inline=1 用于正文内嵌图片
 func (s *Server) getAsset(c *gin.Context) {
+	db, dir, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
 	sha := c.Param("sha")
-	m, err := s.assets.Metadata(sha)
+	m, err := s.assets.Metadata(db, sha)
 	if err != nil || m == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "asset not ready"})
 		return
@@ -101,13 +118,18 @@ func (s *Server) getAsset(c *gin.Context) {
 
 	c.Header("Content-Type", m.Mime)
 	c.Header("Content-Disposition", disposition(m.Name, c.Query("inline") != ""))
-	c.File(s.assets.ReadyPath(sha))
+	c.File(s.assets.ReadyPath(dir, sha))
 }
 
-// DELETE /api/assets/:sha
+// DELETE /api/repos/:repo/assets/:sha
 func (s *Server) deleteAsset(c *gin.Context) {
-	sha := c.Param("sha")
-	if err := s.assets.Remove(sha); err != nil {
+	db, dir, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
+	if err := s.assets.Remove(db, dir, c.Param("sha")); err != nil {
 		if errors.Is(err, asset.ErrNotReady) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -118,7 +140,6 @@ func (s *Server) deleteAsset(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// validSha256 检查是否 64 hex
 func validSha256(s string) bool {
 	if len(s) != 64 {
 		return false
@@ -132,8 +153,7 @@ func disposition(name string, inline bool) string {
 	if inline {
 		return "inline"
 	}
-	// 清洗换行/控制字符防 header injection
-	name = strings.Map(func(r rune) rune {
+	name = strings.Map(func(r rune) rune { // 清洗换行/控制字符防 header injection
 		if r == '\n' || r == '\r' || r == 0 {
 			return -1
 		}

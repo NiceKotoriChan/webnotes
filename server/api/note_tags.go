@@ -1,8 +1,6 @@
 package api
 
 import (
-	"database/sql"
-	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -10,7 +8,7 @@ import (
 
 // GET /api/repos/:repo/notes/:id/tags
 func (s *Server) listNoteTags(c *gin.Context) {
-	db, ok := s.openRepoDB(c)
+	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
 	}
@@ -47,7 +45,7 @@ func (s *Server) listNoteTags(c *gin.Context) {
 
 // POST /api/repos/:repo/notes/:id/tags  body: { tag_id }
 func (s *Server) addNoteTag(c *gin.Context) {
-	db, ok := s.openRepoDB(c)
+	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
 	}
@@ -83,7 +81,7 @@ func (s *Server) addNoteTag(c *gin.Context) {
 
 // DELETE /api/repos/:repo/notes/:id/tags/:tag_id
 func (s *Server) removeNoteTag(c *gin.Context) {
-	db, ok := s.openRepoDB(c)
+	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
 	}
@@ -102,10 +100,4 @@ func (s *Server) removeNoteTag(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
-}
-
-func noteExists(db *sql.DB, id string) bool {
-	var x string
-	err := db.QueryRow(`SELECT id FROM notes WHERE id = ?`, id).Scan(&x)
-	return !errors.Is(err, sql.ErrNoRows)
 }

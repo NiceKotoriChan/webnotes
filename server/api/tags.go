@@ -15,7 +15,7 @@ type Tag struct {
 
 // GET /api/repos/:repo/tags
 func (s *Server) listTags(c *gin.Context) {
-	db, ok := s.openRepoDB(c)
+	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
 	}
@@ -43,7 +43,7 @@ func (s *Server) listTags(c *gin.Context) {
 // POST /api/repos/:repo/tags  body: { name }
 // UNIQUE 冲突返 409
 func (s *Server) createTag(c *gin.Context) {
-	db, ok := s.openRepoDB(c)
+	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
 	}
@@ -73,7 +73,7 @@ func (s *Server) createTag(c *gin.Context) {
 
 // PUT /api/repos/:repo/tags/:id  body: { name }
 func (s *Server) renameTag(c *gin.Context) {
-	db, ok := s.openRepoDB(c)
+	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
 	}
@@ -105,7 +105,7 @@ func (s *Server) renameTag(c *gin.Context) {
 // DELETE /api/repos/:repo/tags/:id
 // 级联 note_tags（ON DELETE CASCADE）
 func (s *Server) deleteTag(c *gin.Context) {
-	db, ok := s.openRepoDB(c)
+	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
 	}

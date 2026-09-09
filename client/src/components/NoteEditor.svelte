@@ -1,40 +1,44 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { untrack } from 'svelte';
   import * as api from '../api';
   import type { Note } from '../api';
-  import TagsPanel from './TagsPanel.svelte';
+  import MarkdownViewer from './MarkdownViewer.svelte';
 
-  export let repo: string;
-  export let note: Note;
+  let {
+    repo,
+    note,
+    onSaved,
+  }: {
+    repo: string;
+    note: Note;
+    onSaved?: () => void;
+  } = $props();
 
-  const dispatch = createEventDispatcher<{ saved: void }>();
+  // {#key note.id} 保证切换笔记即重挂；untrack 只取初始值
+  const noteId = untrack(() => note.id);
+  const initialTitle = untrack(() => note.title);
+  const initialContent = untrack(() => note.content);
+  let title = $state(initialTitle);
+  let content = $state(initialContent);
+  let saving = $state(false);
+  let savedAt = $state(0);
+  let errMsg = $state('');
+  let savedTitle = $state(initialTitle);
+  let savedContent = $state(initialContent);
 
-  let title: string = note.title;
-  let content: string = note.content;
-  let dirty = false;
-  let saving = false;
-  let errMsg = '';
-  let lastSaved: Note = note;
-
-  // 切换笔记时重置
-  $: if (note.id !== lastSaved.id) {
-    title = note.title;
-    content = note.content;
-    dirty = false;
-    lastSaved = note;
-  }
-
-  $: dirty = title !== note.title || content !== note.content;
+  const dirty = $derived(title !== savedTitle || content !== savedContent);
+  const saveState = $derived(saving ? '保存中…' : dirty ? '未保存' : savedAt ? '已保存' : '');
 
   async function save() {
     if (!dirty || saving) return;
     saving = true;
     errMsg = '';
     try {
-      const updated = await api.updateNote(repo, note.id, title, content);
-      lastSaved = { ...note, ...updated };
-      dirty = false;
-      dispatch('saved');
+      await api.updateNote(repo, noteId, { title, content });
+      savedTitle = title;
+      savedContent = content;
+      savedAt = Date.now();
+      onSaved?.();
     } catch (e: any) {
       errMsg = e.message;
     } finally {
@@ -42,7 +46,6 @@
     }
   }
 
-  // Ctrl/Cmd+S 保存
   function onKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
@@ -50,15 +53,15 @@
     }
   }
 
+  // 附件：拖入或粘贴即上传，插入 Markdown 链接
   async function uploadFile(file: File) {
     try {
-      const meta = await api.uploadAsset(file);
+      const meta = await api.uploadAsset(repo, file);
       const isImage = file.type.startsWith('image/');
       const md = isImage
-        ? `![${meta.name}](${api.assetURL(meta.id, true)})`
-        : `[${meta.name}](${api.assetURL(meta.id)})`;
+        ? `![${meta.name}](${api.assetURL(repo, meta.id, true)})`
+        : `[${meta.name}](${api.assetURL(repo, meta.id)})`;
       content = content + (content.endsWith('\n') || content === '' ? '' : '\n\n') + md + '\n';
-      dirty = true;
     } catch (e: any) {
       errMsg = e.message;
     }
@@ -72,9 +75,7 @@
   }
 
   function onPaste(e: ClipboardEvent) {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    for (const it of items) {
+    for (const it of e.clipboardData?.items ?? []) {
       if (it.kind === 'file') {
         const f = it.getAsFile();
         if (f) {
@@ -85,79 +86,52 @@
     }
   }
 
-  let fileInput: HTMLInputElement;
-  function onFilePick(e: Event) {
-    const target = e.target as HTMLInputElement;
-    if (!target.files) return;
-    for (const f of target.files) uploadFile(f);
-    target.value = '';
-  }
-
-  onMount(() => {
-    const interval = setInterval(() => { if (dirty) save(); }, 5000);
-    return () => clearInterval(interval);
+  // 5 秒自动保存
+  $effect(() => {
+    const timer = setInterval(() => save(), 5000);
+    return () => clearInterval(timer);
   });
 </script>
 
-<div class="editor" on:keydown={onKeydown} on:drop={onDrop} on:dragover|preventDefault on:paste={onPaste}>
-  <header>
-    <input class="title" bind:value={title} placeholder="标题" />
-    <button class="primary" on:click={save} disabled={!dirty || saving}>
-      {saving ? '保存中…' : '保存'}
-    </button>
-    <button on:click={() => fileInput.click()}>插入附件</button>
-    <input bind:this={fileInput} type="file" multiple on:change={onFilePick} style="display:none" />
-  </header>
+<svelte:window onkeydown={onKeydown} />
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="editor card" role="region" aria-label="笔记编辑区（可拖入或粘贴附件）"
+  ondrop={onDrop} ondragover={(e) => e.preventDefault()} onpaste={onPaste}>
+  <div class="title-row">
+    <input class="title-input" bind:value={title} placeholder="无标题" />
+    {#if saveState}<span class="save-state">{saveState}</span>{/if}
+  </div>
 
   {#if errMsg}<p class="err">{errMsg}</p>{/if}
 
   <div class="split">
-    <textarea bind:value={content} placeholder="Markdown 正文…"></textarea>
-    <div class="preview markdown">{@html markdown(content)}</div>
+    <textarea bind:value={content} placeholder="开始书写，支持 Markdown；可直接拖入或粘贴附件"></textarea>
+    <div class="preview">
+      <MarkdownViewer content={content} />
+    </div>
   </div>
-
-  <TagsPanel {repo} noteId={note.id} />
 </div>
 
-<script context="module" lang="ts">
-  // 轻量 Markdown 渲染（避免引入完整库）
-  export function markdown(s: string): string {
-    const esc = (t: string) => t
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-    const lines = s.split('\n');
-    const out: string[] = [];
-    let inCode = false;
-    for (const line of lines) {
-      if (line.startsWith('```')) {
-        if (inCode) { out.push('</code></pre>'); inCode = false; }
-        else { out.push('<pre><code>'); inCode = true; }
-        continue;
-      }
-      if (inCode) { out.push(esc(line)); continue; }
-      let l = esc(line);
-      l = l.replace(/^###\s+(.*)$/, '<h3>$1</h3>');
-      l = l.replace(/^##\s+(.*)$/, '<h2>$1</h2>');
-      l = l.replace(/^#\s+(.*)$/, '<h1>$1</h1>');
-      l = l.replace(/^-\s+(.*)$/, '<li>$1</li>');
-      l = l.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">');
-      l = l.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
-      out.push(l);
-    }
-    return out.join('\n');
-  }
-</script>
-
 <style>
-  .editor { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  header {
+  .editor { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  .title-row {
     display: flex;
-    gap: 8px;
-    padding: 8px;
-    border-bottom: 1px solid var(--border);
+    align-items: baseline;
+    gap: 12px;
+    padding: 18px 24px 10px;
   }
-  header .title { flex: 1; font-size: 16px; padding: 6px 8px; }
+  .title-input {
+    flex: 1;
+    font-size: 22px;
+    font-weight: 700;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
+  }
+  .title-input:focus { border: none; }
+  .save-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
   .split { display: flex; flex: 1; min-height: 0; }
   textarea {
     flex: 1;
@@ -165,18 +139,12 @@
     border-right: 1px solid var(--border);
     border-radius: 0;
     resize: none;
-    padding: 12px;
+    padding: 12px 24px 24px;
     font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-    line-height: 1.5;
+    line-height: 1.6;
+    background: transparent;
   }
-  .preview {
-    flex: 1;
-    padding: 12px;
-    overflow-y: auto;
-    line-height: 1.5;
-  }
-  .markdown img { max-width: 100%; }
-  .markdown pre { background: var(--hover); padding: 8px; overflow-x: auto; }
-  .markdown li { margin-left: 1em; }
-  .err { color: var(--danger); padding: 8px; }
+  textarea:focus { border: none; border-right: 1px solid var(--border); }
+  .preview { flex: 1; padding: 12px 24px 24px; overflow-y: auto; line-height: 1.6; }
+  .err { color: var(--danger); padding: 0 24px 8px; margin: 0; }
 </style>
