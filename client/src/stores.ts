@@ -66,9 +66,9 @@ export const notesStore = (() => {
   return {
     subscribe: store.subscribe,
     error,
-    load(r: string) {
+    load(r: string, opts: api.ListNotesOpts = {}) {
       repo = r;
-      return this.refresh();
+      return this.refresh(opts);
     },
     // 无参数 = 拉全部（树形用）；有过滤参数 = 搜索/标签结果
     async refresh(opts: api.ListNotesOpts = {}) {
@@ -114,6 +114,10 @@ export const tagsStore = (() => {
     },
     async create(repo: string, name: string) {
       await api.createTag(repo, name);
+      await this.load(repo);
+    },
+    async rename(repo: string, id: string, name: string) {
+      await api.renameTag(repo, id, name);
       await this.load(repo);
     },
     async remove(repo: string, id: string) {

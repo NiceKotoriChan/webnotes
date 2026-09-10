@@ -1,10 +1,11 @@
 <script lang="ts">
-  // 主界面：左侧三卡片（设置 / 文档树 / 标签），右侧笔记内容
+  // 主工作区：VSC 布局 = 活动栏 | 侧边栏（文档树+标签）| 编辑器
   import { notesStore, tagsStore, lastNoteKey } from '../stores';
   import * as api from '../api';
   import type { Note, Repo, Tag } from '../api';
-  import SettingsCard from './SettingsCard.svelte';
-  import NoteTree, { type TreeNode } from './NoteTree.svelte';
+  import ActivityBar from './ActivityBar.svelte';
+  import TreePanel, { type TreeNode } from './TreePanel.svelte';
+  import TagsPanel from './TagsPanel.svelte';
   import NoteEditor from './NoteEditor.svelte';
 
   let { repo }: { repo: Repo | null } = $props();
@@ -16,8 +17,6 @@
   let errMsg = $state('');
   let loading = $state(false);
   let collapsed = $state<Set<string>>(new Set());
-  let addingTag = $state(false);
-  let newTag = $state('');
   let linkedIds = $state<Set<string>>(new Set());
 
   // 搜索/标签筛选时平铺展示结果，否则按树形展示
@@ -30,14 +29,14 @@
     if (repoId) tagsStore.load(repoId);
   });
 
+  // 仓库切换或搜索/标签筛选变化时加载（load 同时设内部 repo + 拉取）
   $effect(() => {
     if (!repoId) return;
     const q = query.trim();
     const t = tagId;
+    const opts = q || t ? { q: q || undefined, tag_id: t || undefined } : {};
     loading = true;
-    notesStore
-      .refresh(q || t ? { q: q || undefined, tag_id: t || undefined } : {})
-      .finally(() => (loading = false));
+    notesStore.load(repoId, opts).finally(() => (loading = false));
   });
 
   // 当前笔记的标签关联（选中笔记变化时加载）
@@ -52,6 +51,25 @@
       .listNoteTags(rid, nid)
       .then((ts) => (linkedIds = new Set(ts.map((t) => t.id))))
       .catch(() => {});
+  });
+
+  // notesStore 刷新后，把 selected 指向新对象（树内重命名后 NoteEditor 的 note prop 才能拿到新 title）
+  $effect(() => {
+    if (!selected) return;
+    const id = selected.id;
+    const fresh = $notesStore.find((x) => x.id === id);
+    if (fresh && fresh !== selected) selected = fresh;
+  });
+
+  // 首次加载完笔记后，恢复上次打开的笔记（组件按仓库 {#key} 重挂，每仓库只恢复一次）
+  let didRestore = false;
+  $effect(() => {
+    const list = $notesStore;
+    if (didRestore || filtering || list.length === 0 || !repoId) return;
+    didRestore = true;
+    const nid = localStorage.getItem(lastNoteKey(repoId));
+    const found = nid ? list.find((n) => n.id === nid) : undefined;
+    if (found) selected = found;
   });
 
   async function createRoot() {
@@ -92,20 +110,58 @@
     }
   }
 
+  // 树内重命名：title 取新值，content 取 note 对象（上次保存态）
+  async function renameNote(n: Note, title: string) {
+    if (!repoId) return;
+    errMsg = '';
+    try {
+      await api.updateNote(repoId, n.id, { title, content: n.content });
+      await notesStore.refresh(refreshOpts());
+    } catch (e: any) {
+      errMsg = e.message;
+    }
+  }
+
+  // 拖拽移动：把 dragged 移到 target 下（展开 target 让移动后的节点可见）
+  async function moveNote(draggedId: string, targetId: string) {
+    if (!repoId) return;
+    errMsg = '';
+    try {
+      await api.moveNote(repoId, draggedId, targetId);
+      const next = new Set(collapsed);
+      next.delete(targetId);
+      collapsed = next;
+      await notesStore.refresh(refreshOpts());
+    } catch (e: any) {
+      errMsg = e.message;
+      await notesStore.refresh(refreshOpts());
+    }
+  }
+
+  // 拖到根节点：parent_id = null
+  async function moveNoteToRoot(id: string) {
+    if (!repoId) return;
+    errMsg = '';
+    try {
+      await api.moveNote(repoId, id, null);
+      await notesStore.refresh(refreshOpts());
+    } catch (e: any) {
+      errMsg = e.message;
+      await notesStore.refresh(refreshOpts());
+    }
+  }
+
   function toggle(n: Note) {
     const next = new Set(collapsed);
     next.has(n.id) ? next.delete(n.id) : next.add(n.id);
     collapsed = next;
   }
 
-  async function addTag() {
-    const name = newTag.trim();
-    if (!name || !repoId) return;
+  async function addTag(name: string) {
+    if (!repoId) return;
     errMsg = '';
     try {
       await tagsStore.create(repoId, name);
-      newTag = '';
-      addingTag = false;
     } catch (e: any) {
       errMsg = e.message;
     }
@@ -117,6 +173,17 @@
     try {
       await tagsStore.remove(repoId, t.id);
       if (tagId === t.id) tagId = '';
+    } catch (e: any) {
+      errMsg = e.message;
+    }
+  }
+
+  async function renameTag(t: Tag) {
+    const name = prompt('标签名', t.name);
+    if (name === null || !name.trim() || name.trim() === t.name) return;
+    errMsg = '';
+    try {
+      await tagsStore.rename(repoId!, t.id, name.trim());
     } catch (e: any) {
       errMsg = e.message;
     }
@@ -161,26 +228,15 @@
     map.forEach((n) => n.children!.sort(byMtime));
     return roots;
   }
-
-  // 首次加载完笔记后，恢复上次打开的笔记（组件按仓库 {#key} 重挂，每仓库只恢复一次）
-  let didRestore = false;
-  $effect(() => {
-    const list = $notesStore;
-    if (didRestore || filtering || list.length === 0 || !repoId) return;
-    didRestore = true;
-    const nid = localStorage.getItem(lastNoteKey(repoId));
-    const found = nid ? list.find((n) => n.id === nid) : undefined;
-    if (found) selected = found;
-  });
 </script>
 
-<div class="layout">
-  <aside>
-    <SettingsCard />
+<div class="workspace">
+  <ActivityBar />
 
-    <!-- 文档树卡片 -->
-    <div class="card tree-card">
-      <div class="card-head">
+  <aside class="sidebar">
+    <!-- 文档树 -->
+    <section class="tree-panel">
+      <div class="panel-head">
         <h2>文档</h2>
         <button class="primary small" onclick={createRoot} disabled={!repoId}>＋ 新建</button>
       </div>
@@ -191,9 +247,17 @@
       {/if}
       {#if errMsg}<p class="err">{errMsg}</p>{/if}
 
-      <div class="list-wrap">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="list-wrap"
+        ondragover={(e) => { if (e.dataTransfer?.types.includes('text/plain')) e.preventDefault(); }}
+        ondrop={(e) => {
+          e.preventDefault();
+          const id = e.dataTransfer?.getData('text/plain');
+          if (id) moveNoteToRoot(id);
+        }}
+      >
         {#if !repoId}
-          <div class="empty">点击上方仓库图标，打开或新建仓库</div>
+          <div class="empty">点击左侧仓库图标，打开或新建仓库</div>
         {:else if loading}
           <div class="empty">加载中…</div>
         {:else if filtering}
@@ -211,7 +275,7 @@
           </ul>
         {:else}
           <ul class="tree">
-            <NoteTree
+            <TreePanel
               notes={tree}
               selectedId={selected?.id ?? null}
               {collapsed}
@@ -219,6 +283,8 @@
               onToggle={toggle}
               onAddChild={createChild}
               onDelete={remove}
+              onRename={renameNote}
+              onMove={moveNote}
             />
           </ul>
           {#if tree.length === 0}
@@ -226,51 +292,20 @@
           {/if}
         {/if}
       </div>
-    </div>
+    </section>
 
-    <!-- 标签卡片：点击名称筛选；选中笔记时 ＋/✓ 打标签 -->
-    <div class="card tags-card">
-      <div class="card-head">
-        <h2>标签</h2>
-        <button class="small" onclick={() => (addingTag = !addingTag)} disabled={!repoId}>＋ 新标签</button>
-      </div>
-      {#if addingTag && repoId}
-        <form class="add-tag" onsubmit={(e) => { e.preventDefault(); addTag(); }}>
-          <input bind:value={newTag} placeholder="标签名" />
-          <button class="primary small" type="submit">添加</button>
-        </form>
-      {/if}
-      <ul class="tag-list">
-        {#if repoId}
-          <li>
-            <button class="tag" class:active={tagId === ''} onclick={() => (tagId = '')}>
-              <span class="hash">·</span>全部笔记
-            </button>
-          </li>
-          {#each $tagsStore as t (t.id)}
-            <li>
-              <button class="tag" class:active={tagId === t.id}
-                onclick={() => (tagId = tagId === t.id ? '' : t.id)}>
-                <span class="hash">#</span>{t.name}
-              </button>
-              {#if selected}
-                <button class="op" class:on={linkedIds.has(t.id)}
-                  title={linkedIds.has(t.id) ? '从当前笔记移除' : '加到当前笔记'}
-                  onclick={() => toggleLink(t)}>
-                  {linkedIds.has(t.id) ? '✓' : '＋'}
-                </button>
-              {/if}
-              <button class="op danger" title="删除标签" onclick={() => deleteTag(t)}>×</button>
-            </li>
-          {/each}
-          {#if $tagsStore.length === 0}
-            <li class="empty">尚无标签</li>
-          {/if}
-        {:else}
-          <li class="empty">打开仓库后可用</li>
-        {/if}
-      </ul>
-    </div>
+    <!-- 标签 -->
+    <TagsPanel
+      {repoId}
+      {tagId}
+      {selected}
+      {linkedIds}
+      onSelect={(id) => (tagId = id)}
+      onLink={toggleLink}
+      onCreate={addTag}
+      onRename={renameTag}
+      onDelete={deleteTag}
+    />
   </aside>
 
   <!-- 右侧内容区：笔记 content -->
@@ -280,95 +315,63 @@
         <NoteEditor repo={repoId} note={selected} onSaved={() => notesStore.refresh(refreshOpts())} />
       {/key}
     {:else if !repoId}
-      <div class="card placeholder">
+      <div class="placeholder">
         <p>还没有打开仓库</p>
-        <p class="hint">点击左上角仓库图标，新建或打开一个仓库开始</p>
+        <p class="hint">点击左侧仓库图标，新建或打开一个仓库开始</p>
       </div>
     {:else}
-      <div class="card placeholder">选择左侧笔记，或点击「新建」</div>
+      <div class="placeholder">选择左侧笔记，或点击「新建」</div>
     {/if}
   </section>
 </div>
 
 <style>
-  .layout { display: flex; gap: 12px; padding: 12px; height: 100%; }
-  aside {
+  .workspace { display: flex; height: 100%; }
+
+  .sidebar {
     width: 280px;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
     min-height: 0;
+    background: var(--card);
+    border-right: 1px solid var(--border);
   }
-  .card-head {
+  .panel-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 12px;
+    padding: 8px 12px;
   }
-  .card-head h2 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; }
+  .panel-head h2 { margin: 0; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
 
-  /* 文档树卡片 */
-  .tree-card { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  .search-box { padding: 0 12px 8px; }
+  /* 文档树 */
+  .tree-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .search-box { padding: 0 8px 8px; }
   .search-box input { width: 100%; }
-  .list-wrap { flex: 1; overflow-y: auto; padding: 0 6px 6px; }
+  .list-wrap { flex: 1; overflow-y: auto; padding: 0 4px 4px; }
   ul.tree, ul.flat { list-style: none; margin: 0; padding: 0; }
   ul.flat li {
     display: flex;
     align-items: center;
     gap: 8px;
     margin: 1px 0;
-    padding: 7px 8px;
-    border-radius: 6px;
+    padding: 6px 8px;
+    border-radius: 4px;
     cursor: pointer;
   }
   ul.flat li:hover { background: var(--hover); }
   ul.flat li.active { background: var(--accent-soft); }
   ul.flat li.active .title { color: var(--accent-text); font-weight: 600; }
   .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
-    background: none; border: none; padding: 0; cursor: pointer; }
-  .mtime { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    background: none; border: none; padding: 0; cursor: pointer; color: inherit; font: inherit; }
+  .mtime { font-size: 11px; color: var(--muted); white-space: nowrap; }
 
-  /* 标签卡片 */
-  .tags-card { flex-shrink: 0; max-height: 40%; display: flex; flex-direction: column; min-height: 0; }
-  .add-tag { display: flex; gap: 4px; padding: 0 12px 8px; }
-  .add-tag input { flex: 1; min-width: 0; }
-  .tag-list { list-style: none; margin: 0; padding: 0 6px 6px; overflow-y: auto; }
-  .tag-list li { display: flex; align-items: center; margin: 1px 0; border-radius: 6px; }
-  .tag-list li:hover { background: var(--hover); }
-  .tag {
-    flex: 1;
-    text-align: left;
-    background: none;
-    border: none;
-    padding: 6px 8px;
-    color: var(--fg);
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .tag .hash { color: var(--muted); margin-right: 2px; }
-  .tag.active { color: var(--accent-text); font-weight: 600; }
-  .tag.active .hash { color: var(--accent-text); }
-  .op {
-    border: none;
-    background: none;
-    color: var(--muted);
-    padding: 2px 6px;
-    font-size: 13px;
-    visibility: hidden;
-  }
-  .tag-list li:hover .op { visibility: visible; }
-  .op.on { color: var(--accent-text); font-weight: 700; }
-  .op.danger:hover, .op.danger { color: var(--danger); }
-
-  .empty { color: var(--muted); padding: 16px; text-align: center; }
+  .empty { color: var(--muted); padding: 16px; text-align: center; font-size: 13px; }
   .err { color: var(--danger); padding: 0 12px 8px; margin: 0; }
 
   /* 右侧内容区 */
-  .content { flex: 1; display: flex; min-height: 0; }
+  .content { flex: 1; display: flex; min-height: 0; background: var(--card); }
   .placeholder {
     flex: 1;
     display: flex;
