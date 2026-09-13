@@ -27,12 +27,15 @@ GET    /api/repos/{repo}/notes/{id}    获取
 PUT    /api/repos/{repo}/notes/{id}    更新  { title, content }（mtime=now，ctime 不变）
 PATCH  /api/repos/{repo}/notes/{id}    移动  { parent_id }（parent_id=null 移到根）
                                        服务端沿 parent 链防环；成环返回 400
-DELETE /api/repos/{repo}/notes/{id}    删除（级联子树、note_tags、FTS）
+PATCH  /api/repos/{repo}/notes/{id}/icon  设置自定义图标  { icon }（icon=null 恢复自动匹配）
+DELETE /api/repos/{repo}/notes/{id}    删除（默认软删除整棵子树进回收站；?permanent=1 彻底删除）
+POST   /api/repos/{repo}/notes/{id}/restore  还原（连同子树；父级仍删除则移到根）
+GET    /api/repos/{repo}/trash        回收站（列出被删除的顶层笔记）
 ```
 
 - `?q=` 走 FTS5 trigram（匹配 title + content，按 rank 排序；查询词需 ≥3 字符）
 - `?parent_id=` 只返回该节点的直接子笔记；不传则列出全部
-- 删除带子孙的笔记会级联删整棵子树，前端应二次确认
+- 删除为软删除（标记 deleted_at），可从回收站还原；?permanent=1 才真正级联删子树（不二次确认）
 
 ## Tags
 
@@ -54,6 +57,7 @@ DELETE /api/repos/{repo}/notes/{id}/tags/{tag_id}    移除
 ## Assets（附件，仓库内私有）
 
 ```
+GET    /api/repos/{repo}/assets           列出全部 ready 附件 → [{ id, name, mime, size, ctime }]
 HEAD   /api/repos/{repo}/assets/{sha256}   检查是否 ready
        200 ready        404 不存在或非 ready
 POST   /api/repos/{repo}/assets/{sha256}   上传

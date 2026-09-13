@@ -37,6 +37,8 @@ export interface Note {
   content: string;
   ctime: number;
   mtime: number;
+  deleted_at?: number | null;
+  icon?: string | null;
 }
 export interface Tag {
   id: string;
@@ -78,8 +80,17 @@ export const updateNote = (repo: string, id: string, body: { title: string; cont
 // 移动笔记：parent_id 传 null 移到根
 export const moveNote = (repo: string, id: string, parent_id: string | null) =>
   request<Note>("PATCH", `/repos/${repo}/notes/${id}`, json({ parent_id }));
-export const deleteNote = (repo: string, id: string) =>
-  request<void>("DELETE", `/repos/${repo}/notes/${id}`);
+export const deleteNote = (repo: string, id: string, permanent = false) =>
+  request<void>("DELETE", `/repos/${repo}/notes/${id}${permanent ? "?permanent=1" : ""}`);
+// 还原回收站里的笔记（连同子树）
+export const restoreNote = (repo: string, id: string) =>
+  request<void>("POST", `/repos/${repo}/notes/${id}/restore`);
+// 回收站：被删除的顶层笔记
+export const listTrash = (repo: string) =>
+  request<Note[]>("GET", `/repos/${repo}/trash`);
+// 设置/清除笔记自定义图标（icon=null 恢复自动匹配）
+export const setNoteIcon = (repo: string, id: string, icon: string | null) =>
+  request<void>("PATCH", `/repos/${repo}/notes/${id}/icon`, json({ icon }));
 
 // Tags
 export const listTags = (repo: string) => request<Tag[]>("GET", `/repos/${repo}/tags`);
@@ -102,8 +113,17 @@ export const removeNoteTag = (repo: string, noteId: string, tagId: string) =>
 export const assetURL = (repo: string, sha: string, inline = false) =>
   `/api/repos/${repo}/assets/${sha}${inline ? "?inline=1" : ""}`;
 
-// 上传：客户端算 sha256，HEAD 检测秒传，POST 实际上传
-export async function uploadAsset(repo: string, file: File): Promise<AssetMeta> {
+export const listAssets = (repo: string) =>
+  request<AssetMeta[]>("GET", `/repos/${repo}/assets`);
+export const deleteAsset = (repo: string, sha: string) =>
+  request<void>("DELETE", `/repos/${repo}/assets/${sha}`);
+
+// 上传：客户端算 sha256，HEAD 检测秒传，POST 用 XHR 以便回报进度
+export async function uploadAsset(
+  repo: string,
+  file: File,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<AssetMeta> {
   const buf = await file.arrayBuffer();
   const hash = await crypto.subtle.digest("SHA-256", buf);
   const sha = bytesToHex(new Uint8Array(hash));
@@ -113,25 +133,31 @@ export async function uploadAsset(repo: string, file: File): Promise<AssetMeta> 
     return { id: sha, name: file.name, mime: file.type, size: file.size, ctime: Date.now() };
   }
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "X-Name": file.name,
-      "X-Mime": file.type || "application/octet-stream",
-      "X-Size": String(file.size),
-    },
-    body: file,
+  return new Promise<AssetMeta>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("X-Name", file.name);
+    xhr.setRequestHeader("X-Mime", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-Size", String(file.size));
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText) as AssetMeta);
+      } else {
+        let msg = xhr.statusText;
+        try {
+          msg = JSON.parse(xhr.responseText).error ?? msg;
+        } catch {
+          /* noop */
+        }
+        reject(new ApiError(xhr.status, msg));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, "上传失败"));
+    xhr.send(file);
   });
-  if (!res.ok) {
-    let msg = res.statusText;
-    try {
-      msg = (await res.json()).error ?? msg;
-    } catch {
-      /* noop */
-    }
-    throw new ApiError(res.status, msg);
-  }
-  return res.json();
 }
 
 function bytesToHex(bytes: Uint8Array): string {

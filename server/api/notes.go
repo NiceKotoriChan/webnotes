@@ -14,15 +14,17 @@ import (
 )
 
 type Note struct {
-	ID       string  `json:"id"`
-	ParentID *string `json:"parent_id"`
-	Title    string  `json:"title"`
-	Content  string  `json:"content"`
-	CTime    int64   `json:"ctime"`
-	MTime    int64   `json:"mtime"`
+	ID        string  `json:"id"`
+	ParentID  *string `json:"parent_id"`
+	Title     string  `json:"title"`
+	Content   string  `json:"content"`
+	CTime     int64   `json:"ctime"`
+	MTime     int64   `json:"mtime"`
+	DeletedAt *int64  `json:"deleted_at,omitempty"`
+	Icon      *string `json:"icon,omitempty"`
 }
 
-const noteCols = `n.id, n.parent_id, n.title, n.content, n.ctime, n.mtime`
+const noteCols = `n.id, n.parent_id, n.title, n.content, n.ctime, n.mtime, n.deleted_at, n.icon`
 
 // GET /api/repos/:repo/notes?q=&tag_id=&parent_id=&limit=&offset=
 func (s *Server) listNotes(c *gin.Context) {
@@ -46,7 +48,7 @@ func (s *Server) listNotes(c *gin.Context) {
 	useFTS := q != "" && utf8.RuneCountInString(q) >= 3
 
 	joins := strings.Builder{}
-	conds := []string{}
+	conds := []string{"n.deleted_at IS NULL"}
 	args := []any{}
 	if useFTS {
 		joins.WriteString(`JOIN notes_fts f ON f.rowid = n.rowid `)
@@ -107,6 +109,7 @@ func (s *Server) createNote(c *gin.Context) {
 		Title    string  `json:"title"`
 		Content  string  `json:"content"`
 		ParentID *string `json:"parent_id"`
+		Icon     *string `json:"icon"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -125,10 +128,11 @@ func (s *Server) createNote(c *gin.Context) {
 		Content:  body.Content,
 		CTime:    now,
 		MTime:    now,
+		Icon:     body.Icon,
 	}
 	if _, err := db.Exec(
-		`INSERT INTO notes (id, parent_id, title, content, ctime, mtime) VALUES (?, ?, ?, ?, ?, ?)`,
-		n.ID, n.ParentID, n.Title, n.Content, n.CTime, n.MTime,
+		`INSERT INTO notes (id, parent_id, title, content, ctime, mtime, icon) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.ParentID, n.Title, n.Content, n.CTime, n.MTime, n.Icon,
 	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -173,7 +177,7 @@ func (s *Server) updateNote(c *gin.Context) {
 		return
 	}
 	res, err := db.Exec(
-		`UPDATE notes SET title=?, content=?, mtime=? WHERE id=?`,
+		`UPDATE notes SET title=?, content=?, mtime=? WHERE id=? AND deleted_at IS NULL`,
 		body.Title, body.Content, time.Now().UnixMilli(), c.Param("id"),
 	)
 	if err != nil {
@@ -229,7 +233,7 @@ func (s *Server) moveNote(c *gin.Context) {
 	}
 
 	res, err := db.Exec(
-		`UPDATE notes SET parent_id=?, mtime=? WHERE id=?`,
+		`UPDATE notes SET parent_id=?, mtime=? WHERE id=? AND deleted_at IS NULL`,
 		body.ParentID, time.Now().UnixMilli(), noteID,
 	)
 	if err != nil {
@@ -248,7 +252,7 @@ func (s *Server) moveNote(c *gin.Context) {
 	c.JSON(http.StatusOK, n)
 }
 
-// DELETE /api/repos/:repo/notes/:id  级联删除整棵子树、note_tags、FTS（外键 + 触发器）
+// DELETE /api/repos/:repo/notes/:id  软删除整棵子树（默认）；?permanent=1 彻底删除
 func (s *Server) deleteNote(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
@@ -256,7 +260,27 @@ func (s *Server) deleteNote(c *gin.Context) {
 	}
 	defer db.Close()
 
-	res, err := db.Exec(`DELETE FROM notes WHERE id = ?`, c.Param("id"))
+	noteID := c.Param("id")
+	permanent := c.Query("permanent") == "1"
+
+	var (
+		res sql.Result
+		err error
+	)
+	if permanent {
+		// 彻底删除：硬删整棵子树，note_tags 与 FTS 由外键 + 触发器级联
+		res, err = db.Exec(`DELETE FROM notes WHERE id = ?`, noteID)
+	} else {
+		// 软删除：递归标记整棵子树（保留 note_tags 便于还原）
+		res, err = db.Exec(`
+			WITH RECURSIVE subtree(id) AS (
+				SELECT id FROM notes WHERE id = ? AND deleted_at IS NULL
+				UNION ALL
+				SELECT n.id FROM notes n JOIN subtree s ON n.parent_id = s.id
+			)
+			UPDATE notes SET deleted_at = ? WHERE id IN (SELECT id FROM subtree)`,
+			noteID, time.Now().UnixMilli())
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -268,17 +292,133 @@ func (s *Server) deleteNote(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// POST /api/repos/:repo/notes/:id/restore  还原回收站里的笔记（连同其子树）
+func (s *Server) restoreNote(c *gin.Context) {
+	db, _, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
+	noteID := c.Param("id")
+	var parent sql.NullString
+	err := db.QueryRow(
+		`SELECT parent_id FROM notes WHERE id = ? AND deleted_at IS NOT NULL`, noteID,
+	).Scan(&parent)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "note not found in trash"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 递归还原整棵子树
+	if _, err := db.Exec(`
+		WITH RECURSIVE subtree(id) AS (
+			SELECT id FROM notes WHERE id = ?
+			UNION ALL
+			SELECT n.id FROM notes n JOIN subtree s ON n.parent_id = s.id
+		)
+		UPDATE notes SET deleted_at = NULL WHERE id IN (SELECT id FROM subtree)`, noteID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 若父节点仍被删除，移到根
+	if parent.Valid {
+		var parentDeleted int
+		err := db.QueryRow(
+			`SELECT deleted_at IS NOT NULL FROM notes WHERE id = ?`, parent.String,
+		).Scan(&parentDeleted)
+		if err != nil || parentDeleted != 0 {
+			if _, err := db.Exec(`UPDATE notes SET parent_id = NULL WHERE id = ?`, noteID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+// PATCH /api/repos/:repo/notes/:id/icon  body: { icon }  设置自定义图标；icon=null 恢复自动匹配
+func (s *Server) setNoteIcon(c *gin.Context) {
+	db, _, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
+	var body struct {
+		Icon *string `json:"icon"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	res, err := db.Exec(
+		`UPDATE notes SET icon=? WHERE id=? AND deleted_at IS NULL`,
+		body.Icon, c.Param("id"),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "note not found"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// GET /api/repos/:repo/trash  回收站：列出被删除的顶层笔记（父节点未删除的）
+func (s *Server) listTrash(c *gin.Context) {
+	db, _, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT ` + noteCols + ` FROM notes n
+		WHERE n.deleted_at IS NOT NULL
+		  AND (n.parent_id IS NULL OR NOT EXISTS (
+		      SELECT 1 FROM notes p WHERE p.id = n.parent_id AND p.deleted_at IS NOT NULL
+		  ))
+		ORDER BY n.deleted_at DESC`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	notes, err := scanNotes(rows)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, notes)
+}
+
 func scanNotes(rows *sql.Rows) ([]Note, error) {
 	defer rows.Close()
 	out := []Note{}
 	for rows.Next() {
 		var n Note
 		var parent sql.NullString
-		if err := rows.Scan(&n.ID, &parent, &n.Title, &n.Content, &n.CTime, &n.MTime); err != nil {
+		var deleted sql.NullInt64
+		var icon sql.NullString
+		if err := rows.Scan(&n.ID, &parent, &n.Title, &n.Content, &n.CTime, &n.MTime, &deleted, &icon); err != nil {
 			return nil, err
 		}
 		if parent.Valid {
 			n.ParentID = &parent.String
+		}
+		if deleted.Valid {
+			n.DeletedAt = &deleted.Int64
+		}
+		if icon.Valid {
+			n.Icon = &icon.String
 		}
 		out = append(out, n)
 	}
@@ -288,21 +428,29 @@ func scanNotes(rows *sql.Rows) ([]Note, error) {
 func fetchNote(db *sql.DB, id string) (*Note, error) {
 	var n Note
 	var parent sql.NullString
+	var deleted sql.NullInt64
+	var icon sql.NullString
 	err := db.QueryRow(
-		`SELECT `+noteCols+` FROM notes n WHERE n.id = ?`, id,
-	).Scan(&n.ID, &parent, &n.Title, &n.Content, &n.CTime, &n.MTime)
+		`SELECT `+noteCols+` FROM notes n WHERE n.id = ? AND n.deleted_at IS NULL`, id,
+	).Scan(&n.ID, &parent, &n.Title, &n.Content, &n.CTime, &n.MTime, &deleted, &icon)
 	if err != nil {
 		return nil, err
 	}
 	if parent.Valid {
 		n.ParentID = &parent.String
 	}
+	if deleted.Valid {
+		n.DeletedAt = &deleted.Int64
+	}
+	if icon.Valid {
+		n.Icon = &icon.String
+	}
 	return &n, nil
 }
 
 func noteExists(db *sql.DB, id string) bool {
 	var x string
-	err := db.QueryRow(`SELECT id FROM notes WHERE id = ?`, id).Scan(&x)
+	err := db.QueryRow(`SELECT id FROM notes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&x)
 	return !errors.Is(err, sql.ErrNoRows)
 }
 

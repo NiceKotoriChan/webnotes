@@ -181,7 +181,7 @@ func (s *Store) DeleteRepo(id string) error {
 	return s.saveLocked()
 }
 
-// OpenRepo 打开已有仓库的 data.db 并确保 schema；仓库不存在返回 ErrNotFound（不会新建空库）
+// OpenRepo 打开已有仓库的 data.db 并确保 schema 与迁移；仓库不存在返回 ErrNotFound（不会新建空库）
 func (s *Store) OpenRepo(id string) (*sql.DB, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return nil, ErrNotFound
@@ -198,6 +198,10 @@ func (s *Store) OpenRepo(id string) (*sql.DB, error) {
 		return nil, err
 	}
 	if _, err := db.Exec(RepoSchema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := migrateRepo(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -218,6 +222,51 @@ func openDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+// columnExists 判断表是否已有某列
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			typ       string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// migrateRepo 迁移旧库：按需补列（幂等）。触发器逻辑不变，无需重建。
+func migrateRepo(db *sql.DB) error {
+	for _, col := range []struct{ name, ddl string }{
+		{"deleted_at", `ALTER TABLE notes ADD COLUMN deleted_at INTEGER`},
+		{"icon", `ALTER TABLE notes ADD COLUMN icon TEXT`},
+	} {
+		has, err := columnExists(db, "notes", col.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := db.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // RepoSchema 每个仓库 data.db 的结构，与 docs/data.sql 保持一致
 const RepoSchema = `
 CREATE TABLE IF NOT EXISTS assets (
@@ -231,12 +280,14 @@ CREATE TABLE IF NOT EXISTS assets (
 );
 
 CREATE TABLE IF NOT EXISTS notes (
-    id        TEXT PRIMARY KEY,
-    parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
-    title     TEXT NOT NULL DEFAULT '',
-    content   TEXT NOT NULL DEFAULT '',
-    ctime     INTEGER NOT NULL,
-    mtime     INTEGER NOT NULL
+    id         TEXT PRIMARY KEY,
+    parent_id  TEXT REFERENCES notes(id) ON DELETE CASCADE,
+    title      TEXT NOT NULL DEFAULT '',
+    content    TEXT NOT NULL DEFAULT '',
+    ctime      INTEGER NOT NULL,
+    mtime      INTEGER NOT NULL,
+    deleted_at INTEGER,
+    icon       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_notes_parent ON notes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_notes_mtime  ON notes(mtime DESC);
@@ -246,17 +297,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     content = 'notes', content_rowid = 'rowid',
     tokenize = 'trigram'
 );
-CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
-END;
-CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
-END;
-CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
-    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
-END;
-
+` + ftsTriggers + `
 CREATE TABLE IF NOT EXISTS tags (
     id   TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
@@ -267,3 +308,17 @@ CREATE TABLE IF NOT EXISTS note_tags (
     PRIMARY KEY (note_id, tag_id)
 );
 CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id);`
+
+// ftsTriggers 维护 notes ↔ notes_fts 同步（无条件）。软删除的笔记仍在索引中，
+// 由查询层的 deleted_at IS NULL 过滤，避免 FTS5 外部内容表同步不一致。
+const ftsTriggers = `
+CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
+    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+END;`

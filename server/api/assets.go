@@ -15,6 +15,22 @@ import (
 	"webnotes/server/asset"
 )
 
+// GET /api/repos/:repo/assets — 列出全部 ready 附件
+func (s *Server) listAssets(c *gin.Context) {
+	db, _, ok := s.openRepo(c)
+	if !ok {
+		return
+	}
+	defer db.Close()
+
+	metas, err := s.assets.List(db)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, metas)
+}
+
 // HEAD /api/repos/:repo/assets/:sha — 检查是否 ready
 func (s *Server) headAsset(c *gin.Context) {
 	db, _, ok := s.openRepo(c)

@@ -122,6 +122,26 @@ func (a *Store) CleanupUploading(db *sql.DB, id string) {
 	db.Exec(`DELETE FROM assets WHERE id = ? AND status='uploading'`, id)
 }
 
+// List 列出该仓库全部 ready 附件，按上传时间倒序
+func (a *Store) List(db *sql.DB) ([]Metadata, error) {
+	rows, err := db.Query(
+		`SELECT id, name, mime, size, ctime FROM assets WHERE status='ready' ORDER BY ctime DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Metadata{}
+	for rows.Next() {
+		var m Metadata
+		if err := rows.Scan(&m.ID, &m.Name, &m.Mime, &m.Size, &m.Ctime); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // Metadata 返回单条元数据；不存在返回 (nil, nil)
 func (a *Store) Metadata(db *sql.DB, id string) (*Metadata, error) {
 	var m Metadata

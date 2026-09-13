@@ -7,18 +7,27 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
-  },
-  "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5.0.1",
-    "@tsconfig/svelte": "^5.0.4",
-    "svelte": "^5.16.0",
-    "svelte-check": "^4.1.1",
-    "typescript": "^5.6.2",
-    "vite": "^6.0.5"
+    "check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "github-markdown-css": "^5.9.0",
-    "marked": "^15.0.4"
+    "@iconify/vue": "^5.0.1",
+    "@tiptap/core": "^3.31.3",
+    "@tiptap/extension-image": "^3.31.3",
+    "@tiptap/extension-link": "^3.31.3",
+    "@tiptap/extension-task-item": "^3.31.3",
+    "@tiptap/extension-task-list": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
+    "marked": "^15.0.4",
+    "turndown": "^7.2.4",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/turndown": "^5.0.6",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.6.2",
+    "vite": "^6.0.5",
+    "vue-tsc": "^2.1.10"
   }
 }

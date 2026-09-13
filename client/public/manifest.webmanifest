@@ -1,0 +1,18 @@
+{
+  "name": "WebNotes",
+  "short_name": "WebNotes",
+  "description": "个人笔记软件：树形笔记、标签、全文搜索，所见即所得编辑",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f8fa",
+  "theme_color": "#1f6feb",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

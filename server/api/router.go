@@ -35,7 +35,10 @@ func NewRouter(s *store.Store, a *asset.Store) *gin.Engine {
 		g.GET("/repos/:repo/notes/:id", srv.getNote)
 		g.PUT("/repos/:repo/notes/:id", srv.updateNote)
 		g.PATCH("/repos/:repo/notes/:id", srv.moveNote)
+		g.PATCH("/repos/:repo/notes/:id/icon", srv.setNoteIcon)
 		g.DELETE("/repos/:repo/notes/:id", srv.deleteNote)
+		g.POST("/repos/:repo/notes/:id/restore", srv.restoreNote)
+		g.GET("/repos/:repo/trash", srv.listTrash)
 
 		// Tags
 		g.GET("/repos/:repo/tags", srv.listTags)
@@ -49,6 +52,7 @@ func NewRouter(s *store.Store, a *asset.Store) *gin.Engine {
 		g.DELETE("/repos/:repo/notes/:id/tags/:tag_id", srv.removeNoteTag)
 
 		// Assets（仓库内私有）
+		g.GET("/repos/:repo/assets", srv.listAssets)
 		g.HEAD("/repos/:repo/assets/:sha", srv.headAsset)
 		g.POST("/repos/:repo/assets/:sha", srv.uploadAsset)
 		g.GET("/repos/:repo/assets/:sha", srv.getAsset)

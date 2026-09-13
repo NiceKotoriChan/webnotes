@@ -11,14 +11,17 @@ CREATE TABLE assets (
     ctime INTEGER NOT NULL
 );
 -- 笔记：树形结构，id 为 UUIDv7，parent_id 为 NULL 即根节点；正文直接存库
--- 删父笔记会级联删除整棵子树
+-- 删除默认软删除（deleted_at 标记）进回收站，可还原；?permanent=1 才硬删子树
+-- icon 为自定义图标名（lucide，不含前缀），NULL 用前端自动匹配
 CREATE TABLE notes (
     id TEXT PRIMARY KEY,
     parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
     title TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
     ctime INTEGER NOT NULL,
-    mtime INTEGER NOT NULL
+    mtime INTEGER NOT NULL,
+    deleted_at INTEGER,
+    icon TEXT
 );
 CREATE INDEX idx_notes_parent ON notes(parent_id);
 CREATE INDEX idx_notes_mtime ON notes(mtime DESC);

@@ -1,0 +1,249 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'Inter';
+  src: url(https://cdn.jsdelivr.net/fontsource/fonts/inter:vf@latest/latin-wght-normal.woff2);
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* —— 亮/暗两套原始值：作为可主题化的 CSS 变量，供下方 @theme 与组件 var() 引用 —— */
+:root {
+  --canvas-default: #ffffff;
+  --canvas-subtle: #f6f8fa;
+  --canvas-inset: #f6f8fa;
+  --canvas-overlay: #ffffff;
+  --fg-default: #1f2328;
+  --fg-muted: #656d76;
+  --fg-subtle: #8c959f;
+  --border-default: #d0d7de;
+  --border-muted: #d8dee4;
+  --btn-bg: #f6f8fa;
+  --btn-border: rgba(31, 35, 40, 0.15);
+  --btn-hover-bg: #f3f4f6;
+  --btn-active-bg: #eaeef2;
+  --btn-primary-bg: #1f883d;
+  --btn-primary-hover-bg: #1a7f37;
+  --btn-primary-text: #ffffff;
+  --accent-fg: #0969da;
+  --accent-emphasis: #1f6feb;
+  --accent-subtle: rgba(9, 105, 218, 0.1);
+  --danger-fg: #cf222e;
+  --danger-emphasis: #cf222e;
+  --danger-subtle: rgba(248, 81, 73, 0.15);
+  --success-fg: #1a7f37;
+  --header-bg: #f6f8fa;
+  --header-border: #d0d7de;
+
+  --shadow-default: 0 1px 3px rgba(31, 35, 40, 0.12);
+  --shadow-floating: 0 8px 24px rgba(140, 149, 159, 0.2);
+
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.dark {
+  --canvas-default: #0d1117;
+  --canvas-subtle: #161b22;
+  --canvas-inset: #010409;
+  --canvas-overlay: #1c2128;
+  --fg-default: #e6edf3;
+  --fg-muted: #8b949e;
+  --fg-subtle: #6e7681;
+  --border-default: #30363d;
+  --border-muted: #21262d;
+  --btn-bg: #21262d;
+  --btn-border: rgba(240, 246, 252, 0.1);
+  --btn-hover-bg: #30363d;
+  --btn-active-bg: #484f58;
+  --btn-primary-bg: #238636;
+  --btn-primary-hover-bg: #2ea043;
+  --btn-primary-text: #ffffff;
+  --accent-fg: #4493f8;
+  --accent-emphasis: #1f6feb;
+  --accent-subtle: rgba(56, 139, 253, 0.15);
+  --danger-fg: #f85149;
+  --danger-emphasis: #da3633;
+  --danger-subtle: rgba(248, 81, 73, 0.15);
+  --success-fg: #3fb950;
+  --header-bg: #161b22;
+  --header-border: #30363d;
+
+  --shadow-default: 0 1px 3px rgba(1, 4, 9, 0.3);
+  --shadow-floating: 0 8px 24px rgba(1, 4, 9, 0.6);
+}
+
+/* Tailwind v4 主题：把语义色注册为 --color-*，供 text/bg/border 工具类使用。
+   inline 让工具类直接引用 var(--xxx)，从而跟随 .dark 切换。 */
+@theme inline {
+  --color-canvas-default: var(--canvas-default);
+  --color-canvas-subtle: var(--canvas-subtle);
+  --color-canvas-inset: var(--canvas-inset);
+  --color-canvas-overlay: var(--canvas-overlay);
+  --color-fg-default: var(--fg-default);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-muted: var(--border-muted);
+  --color-btn-bg: var(--btn-bg);
+  --color-btn-border: var(--btn-border);
+  --color-btn-hover-bg: var(--btn-hover-bg);
+  --color-btn-active-bg: var(--btn-active-bg);
+  --color-btn-primary-bg: var(--btn-primary-bg);
+  --color-btn-primary-hover-bg: var(--btn-primary-hover-bg);
+  --color-btn-primary-text: var(--btn-primary-text);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-emphasis: var(--accent-emphasis);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-danger-fg: var(--danger-fg);
+  --color-danger-emphasis: var(--danger-emphasis);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-success-fg: var(--success-fg);
+  --color-header-bg: var(--header-bg);
+  --color-header-border: var(--header-border);
+
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-mono);
+}
+
+/* —— 基础 —— */
+html, body, #app {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-default);
+  background: var(--canvas-default);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* —— 按钮 —— */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--fg-default);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--btn-hover-bg); }
+.btn:active { background: var(--btn-active-bg); }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-primary {
+  color: var(--btn-primary-text);
+  background: var(--btn-primary-bg);
+  border-color: rgba(31, 35, 40, 0.15);
+}
+.btn-primary:hover { background: var(--btn-primary-hover-bg); }
+
+.btn-sm { padding: 3px 8px; font-size: 11px; }
+
+.btn-icon {
+  padding: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.btn-icon:hover {
+  background: var(--btn-hover-bg);
+  color: var(--fg-default);
+}
+
+/* —— 输入框 —— */
+input, textarea {
+  padding: 5px 12px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--fg-default);
+  background: var(--canvas-default);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input:focus, textarea:focus {
+  border-color: var(--accent-emphasis);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+input::placeholder, textarea::placeholder {
+  color: var(--fg-subtle);
+}
+
+/* —— 链接 —— */
+a, .link {
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+a:hover, .link:hover { text-decoration: underline; }
+
+/* —— TipTap 编辑器内容 —— */
+.tiptap:focus { outline: none; }
+.tiptap {
+  min-height: 100%;
+  padding: 16px;
+}
+.tiptap h1, .tiptap h2, .tiptap h3 {
+  margin: 1em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.tiptap p { margin: 0 0 1em; line-height: 1.6; }
+.tiptap ul, .tiptap ol {
+  padding-left: 2em;
+  margin: 0 0 1em;
+}
+.tiptap ul { list-style: disc; }
+.tiptap ol { list-style: decimal; }
+.tiptap blockquote {
+  margin: 0 0 1em;
+  padding: 0 1em;
+  border-left: 4px solid var(--border-default);
+  color: var(--fg-muted);
+}
+.tiptap code {
+  padding: 0.2em 0.4em;
+  background: var(--canvas-subtle);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.tiptap pre {
+  padding: 16px;
+  background: var(--canvas-subtle);
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0 0 1em;
+}
+.tiptap pre code { padding: 0; background: transparent; }
+.tiptap a { color: var(--accent-fg); }
+.tiptap a:hover { text-decoration: underline; }
+.tiptap img { max-width: 100%; }
+.tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+.tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.tiptap ul[data-type="taskList"] input[type="checkbox"] {
+  margin-top: 4px;
+  accent-color: var(--accent-emphasis);
+}
