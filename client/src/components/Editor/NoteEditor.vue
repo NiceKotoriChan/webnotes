@@ -17,7 +17,7 @@ const props = defineProps<{
 
 // 初值只读一次（切笔记由父级 :key 重挂）
 const noteId = props.note.id;
-const initialContent = props.note.content;
+const initialContent = props.note.data;
 const initialHtml = mdToHtml(initialContent);
 
 const content = ref(initialContent);
@@ -67,7 +67,7 @@ async function save() {
   saving.value = true;
   errMsg.value = '';
   try {
-    await api.updateNote(props.repo, noteId, { title: props.note.title, content: content.value });
+    await api.updateNote(props.repo, noteId, { title: props.note.title, data: content.value });
     savedContent.value = content.value;
     savedAt.value = Date.now();
     props.onSaved?.();

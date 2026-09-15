@@ -28,15 +28,14 @@ const json = (data: unknown): RequestInit => ({
 export interface Repo {
   id: string;
   name: string;
-  ctime: number;
+  date: number;
 }
 export interface Note {
   id: string;
   parent_id: string | null;
   title: string;
-  content: string;
-  ctime: number;
-  mtime: number;
+  data: string;
+  date: number;
   deleted_at?: number | null;
   icon?: string | null;
 }
@@ -49,7 +48,7 @@ export interface AssetMeta {
   name: string;
   mime: string;
   size: number;
-  ctime: number;
+  date: number;
 }
 
 // Repos
@@ -73,9 +72,9 @@ export const listNotes = (repo: string, opts: ListNotesOpts = {}) => {
   p.set("limit", "1000");
   return request<Note[]>("GET", `/repos/${repo}/notes?${p}`);
 };
-export const createNote = (repo: string, body: { title: string; content: string; parent_id?: string | null }) =>
+export const createNote = (repo: string, body: { title: string; data: string; parent_id?: string | null }) =>
   request<Note>("POST", `/repos/${repo}/notes`, json(body));
-export const updateNote = (repo: string, id: string, body: { title: string; content: string }) =>
+export const updateNote = (repo: string, id: string, body: { title: string; data: string }) =>
   request<Note>("PUT", `/repos/${repo}/notes/${id}`, json(body));
 // 移动笔记：parent_id 传 null 移到根
 export const moveNote = (repo: string, id: string, parent_id: string | null) =>
@@ -130,7 +129,7 @@ export async function uploadAsset(
   const url = assetURL(repo, sha);
 
   if ((await fetch(url, { method: "HEAD" })).status === 200) {
-    return { id: sha, name: file.name, mime: file.type, size: file.size, ctime: Date.now() };
+    return { id: sha, name: file.name, mime: file.type, size: file.size, date: Date.now() };
   }
 
   return new Promise<AssetMeta>((resolve, reject) => {

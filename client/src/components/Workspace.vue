@@ -116,7 +116,7 @@ async function renameNote(n: Note, title: string) {
   if (!rid) return;
   errMsg.value = '';
   try {
-    await api.updateNote(rid, n.id, { title, content: n.content });
+    await api.updateNote(rid, n.id, { title, data: n.data });
     await notes.refresh();
   } catch (e: any) {
     errMsg.value = e.message;

@@ -17,14 +17,13 @@ type Note struct {
 	ID        string  `json:"id"`
 	ParentID  *string `json:"parent_id"`
 	Title     string  `json:"title"`
-	Content   string  `json:"content"`
-	CTime     int64   `json:"ctime"`
-	MTime     int64   `json:"mtime"`
+	Data      string  `json:"data"`
+	Date      int64   `json:"date"`
 	DeletedAt *int64  `json:"deleted_at,omitempty"`
 	Icon      *string `json:"icon,omitempty"`
 }
 
-const noteCols = `n.id, n.parent_id, n.title, n.content, n.ctime, n.mtime, n.deleted_at, n.icon`
+const noteCols = `n.id, n.parent_id, n.title, n.data, n.date, n.deleted_at, n.icon`
 
 // GET /api/repos/:repo/notes?q=&tag_id=&parent_id=&limit=&offset=
 func (s *Server) listNotes(c *gin.Context) {
@@ -55,7 +54,7 @@ func (s *Server) listNotes(c *gin.Context) {
 		conds = append(conds, "notes_fts MATCH ?")
 		args = append(args, q)
 	} else if q != "" {
-		conds = append(conds, "(n.title LIKE ? OR n.content LIKE ?)")
+		conds = append(conds, "(n.title LIKE ? OR n.data LIKE ?)")
 		like := "%" + q + "%"
 		args = append(args, like, like)
 	}
@@ -73,7 +72,7 @@ func (s *Server) listNotes(c *gin.Context) {
 		}
 	}
 
-	order := "n.mtime DESC"
+	order := "n.date DESC"
 	if useFTS {
 		order = "f.rank"
 	}
@@ -97,7 +96,7 @@ func (s *Server) listNotes(c *gin.Context) {
 	c.JSON(http.StatusOK, notes)
 }
 
-// POST /api/repos/:repo/notes  body: { title, content, parent_id? }
+// POST /api/repos/:repo/notes  body: { title, data, parent_id?, icon? }
 func (s *Server) createNote(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
@@ -107,7 +106,7 @@ func (s *Server) createNote(c *gin.Context) {
 
 	var body struct {
 		Title    string  `json:"title"`
-		Content  string  `json:"content"`
+		Data     string  `json:"data"`
 		ParentID *string `json:"parent_id"`
 		Icon     *string `json:"icon"`
 	}
@@ -125,14 +124,13 @@ func (s *Server) createNote(c *gin.Context) {
 		ID:       uuid.NewString(),
 		ParentID: body.ParentID,
 		Title:    body.Title,
-		Content:  body.Content,
-		CTime:    now,
-		MTime:    now,
+		Data:     body.Data,
+		Date:     now,
 		Icon:     body.Icon,
 	}
 	if _, err := db.Exec(
-		`INSERT INTO notes (id, parent_id, title, content, ctime, mtime, icon) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		n.ID, n.ParentID, n.Title, n.Content, n.CTime, n.MTime, n.Icon,
+		`INSERT INTO notes (id, parent_id, title, data, date, icon) VALUES (?, ?, ?, ?, ?, ?)`,
+		n.ID, n.ParentID, n.Title, n.Data, n.Date, n.Icon,
 	); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -160,7 +158,7 @@ func (s *Server) getNote(c *gin.Context) {
 	c.JSON(http.StatusOK, n)
 }
 
-// PUT /api/repos/:repo/notes/:id  body: { title, content }（mtime=now，ctime/parent 不变）
+// PUT /api/repos/:repo/notes/:id  body: { title, data }（date/parent/icon 不变）
 func (s *Server) updateNote(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
@@ -169,16 +167,16 @@ func (s *Server) updateNote(c *gin.Context) {
 	defer db.Close()
 
 	var body struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
+		Title string `json:"title"`
+		Data  string `json:"data"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	res, err := db.Exec(
-		`UPDATE notes SET title=?, content=?, mtime=? WHERE id=? AND deleted_at IS NULL`,
-		body.Title, body.Content, time.Now().UnixMilli(), c.Param("id"),
+		`UPDATE notes SET title=?, data=? WHERE id=? AND deleted_at IS NULL`,
+		body.Title, body.Data, c.Param("id"),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -233,8 +231,8 @@ func (s *Server) moveNote(c *gin.Context) {
 	}
 
 	res, err := db.Exec(
-		`UPDATE notes SET parent_id=?, mtime=? WHERE id=? AND deleted_at IS NULL`,
-		body.ParentID, time.Now().UnixMilli(), noteID,
+		`UPDATE notes SET parent_id=? WHERE id=? AND deleted_at IS NULL`,
+		body.ParentID, noteID,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -408,7 +406,7 @@ func scanNotes(rows *sql.Rows) ([]Note, error) {
 		var parent sql.NullString
 		var deleted sql.NullInt64
 		var icon sql.NullString
-		if err := rows.Scan(&n.ID, &parent, &n.Title, &n.Content, &n.CTime, &n.MTime, &deleted, &icon); err != nil {
+		if err := rows.Scan(&n.ID, &parent, &n.Title, &n.Data, &n.Date, &deleted, &icon); err != nil {
 			return nil, err
 		}
 		if parent.Valid {
@@ -432,7 +430,7 @@ func fetchNote(db *sql.DB, id string) (*Note, error) {
 	var icon sql.NullString
 	err := db.QueryRow(
 		`SELECT `+noteCols+` FROM notes n WHERE n.id = ? AND n.deleted_at IS NULL`, id,
-	).Scan(&n.ID, &parent, &n.Title, &n.Content, &n.CTime, &n.MTime, &deleted, &icon)
+	).Scan(&n.ID, &parent, &n.Title, &n.Data, &n.Date, &deleted, &icon)
 	if err != nil {
 		return nil, err
 	}

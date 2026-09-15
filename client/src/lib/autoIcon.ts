@@ -27,6 +27,43 @@ const EXT_ICON: Record<string, string> = {
 };
 
 const RULES: [RegExp, string][] = [
+  // —— 操作系统 / 发行版 ——
+  [/linux-mint/i, 'linux-mint'],
+  [/linux|内核|kernel/i, 'linux'],
+  [/ubuntu/i, 'ubuntu'],
+  [/debian/i, 'debian'],
+  [/fedora/i, 'fedora'],
+  [/archlinux|arch\s*linux|\barch\b/i, 'arch'],
+  [/macos|mac\s*os|苹果|apple|iphone|ipad|\bios\b/i, 'apple'],
+  [/windows|微软|microsoft/i, 'microsoft-windows'],
+  [/android/i, 'android'],
+  // —— 开发 / 运维 ——
+  [/docker/i, 'docker'],
+  [/kubernetes|\bk8s\b/i, 'kubernetes'],
+  [/github/i, 'github'],
+  [/gitlab/i, 'gitlab'],
+  [/\bgit\b/i, 'git'],
+  [/terminal|shell|bash|zsh|终端|命令行/i, 'console'],
+  // —— 编程语言 / 框架 ——
+  [/typescript|\bts\b/i, 'language-typescript'],
+  [/javascript|\bjs\b/i, 'language-javascript'],
+  [/python|\bpy\b/i, 'language-python'],
+  [/golang|\bgo\b/i, 'language-go'],
+  [/rust|\brs\b/i, 'language-rust'],
+  [/java/i, 'language-java'],
+  [/c\+\+|cpp/i, 'language-cpp'],
+  [/\bc\b|c语言/i, 'language-c'],
+  [/c#|csharp/i, 'language-csharp'],
+  [/php/i, 'language-php'],
+  [/ruby/i, 'language-ruby'],
+  [/swift/i, 'language-swift'],
+  [/kotlin/i, 'language-kotlin'],
+  [/lua/i, 'language-lua'],
+  [/haskell/i, 'language-haskell'],
+  [/react/i, 'react'],
+  [/vue/i, 'vuejs'],
+  [/node/i, 'nodejs'],
+  // —— 通用 ——
   [/readme/i, 'book-open-variant'],
   [/todo|待办|任务清单|task/i, 'format-list-checks'],
   [/会议|meeting|纪要/i, 'calendar-range'],

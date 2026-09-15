@@ -63,7 +63,7 @@ function fmtTime(ts: number) {
         <span v-else class="file-icon"><Icon icon="mdi:file-outline" width="20" height="20" /></span>
         <div class="meta">
           <a class="name" :href="api.assetURL(repoId, m.id)" target="_blank" rel="noreferrer" :title="m.name">{{ m.name }}</a>
-          <span class="sub">{{ fmtSize(m.size) }} · {{ fmtTime(m.ctime) }}</span>
+          <span class="sub">{{ fmtSize(m.size) }} · {{ fmtTime(m.date) }}</span>
         </div>
         <div class="ops">
           <button class="op" title="复制链接" @click="copyLink(m)">

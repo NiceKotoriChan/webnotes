@@ -22,9 +22,9 @@ var ErrNotFound = errors.New("not found")
 
 // RepoInfo repos.json 中的一条索引
 type RepoInfo struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	CTime int64  `json:"ctime"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Date int64  `json:"date"`
 }
 
 type Store struct {
@@ -79,7 +79,7 @@ func (s *Store) reconcile() error {
 			merged = append(merged, RepoInfo{ID: id, Name: "未命名"})
 		}
 	}
-	sort.Slice(merged, func(i, j int) bool { return merged[i].CTime < merged[j].CTime })
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Date < merged[j].Date })
 	s.repos = merged
 	return s.saveLocked()
 }
@@ -133,7 +133,7 @@ func (s *Store) CreateRepo(name string) (*RepoInfo, error) {
 	}
 	db.Close()
 
-	info := RepoInfo{ID: id, Name: name, CTime: time.Now().UnixMilli()}
+	info := RepoInfo{ID: id, Name: name, Date: time.Now().UnixMilli()}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.repos = append(s.repos, info)
@@ -248,8 +248,74 @@ func columnExists(db *sql.DB, table, column string) (bool, error) {
 	return false, rows.Err()
 }
 
-// migrateRepo 迁移旧库：按需补列（幂等）。触发器逻辑不变，无需重建。
+// migrateRepo 迁移旧库到新 schema（幂等）：
+//
+//	notes: content→data, ctime→date, 删 mtime；assets: ctime→date；FTS 随 content→data 重建。
 func migrateRepo(db *sql.DB) error {
+	hasContent, err := columnExists(db, "notes", "content")
+	if err != nil {
+		return err
+	}
+	hasCtime, err := columnExists(db, "notes", "ctime")
+	if err != nil {
+		return err
+	}
+	hasMtime, err := columnExists(db, "notes", "mtime")
+	if err != nil {
+		return err
+	}
+	hasAssetCtime, err := columnExists(db, "assets", "ctime")
+	if err != nil {
+		return err
+	}
+
+	needsRebuild := hasContent || hasCtime || hasMtime || hasAssetCtime
+	if needsRebuild {
+		// 先删依赖旧列 content 的 FTS 触发器与表，改完列再重建
+		for _, stmt := range []string{
+			`DROP TRIGGER IF EXISTS notes_ai`,
+			`DROP TRIGGER IF EXISTS notes_ad`,
+			`DROP TRIGGER IF EXISTS notes_au`,
+			`DROP TABLE IF EXISTS notes_fts`,
+		} {
+			if _, err := db.Exec(stmt); err != nil {
+				return err
+			}
+		}
+	}
+	if hasContent {
+		if _, err := db.Exec(`ALTER TABLE notes RENAME COLUMN content TO data`); err != nil {
+			return err
+		}
+	}
+	if hasCtime {
+		if _, err := db.Exec(`ALTER TABLE notes RENAME COLUMN ctime TO date`); err != nil {
+			return err
+		}
+	}
+	if hasMtime {
+		if _, err := db.Exec(`ALTER TABLE notes DROP COLUMN mtime`); err != nil {
+			return err
+		}
+	}
+	if hasAssetCtime {
+		if _, err := db.Exec(`ALTER TABLE assets RENAME COLUMN ctime TO date`); err != nil {
+			return err
+		}
+	}
+	if needsRebuild {
+		if _, err := db.Exec(`CREATE VIRTUAL TABLE notes_fts USING fts5(title, data, content='notes', content_rowid='rowid', tokenize='trigram')`); err != nil {
+			return err
+		}
+		if _, err := db.Exec(ftsTriggers); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`INSERT INTO notes_fts(notes_fts) VALUES('rebuild')`); err != nil {
+			return err
+		}
+	}
+
+	// 更老的库可能缺 deleted_at / icon，补齐
 	for _, col := range []struct{ name, ddl string }{
 		{"deleted_at", `ALTER TABLE notes ADD COLUMN deleted_at INTEGER`},
 		{"icon", `ALTER TABLE notes ADD COLUMN icon TEXT`},
@@ -264,6 +330,11 @@ func migrateRepo(db *sql.DB) error {
 			}
 		}
 	}
+
+	// date 索引：旧库改名后才有 date 列，放这里统一建
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_notes_date ON notes(date DESC)`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -276,24 +347,22 @@ CREATE TABLE IF NOT EXISTS assets (
     size   INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'uploading'
            CHECK (status IN ('uploading','ready','deleting')),
-    ctime  INTEGER NOT NULL
+    date   INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS notes (
     id         TEXT PRIMARY KEY,
     parent_id  TEXT REFERENCES notes(id) ON DELETE CASCADE,
     title      TEXT NOT NULL DEFAULT '',
-    content    TEXT NOT NULL DEFAULT '',
-    ctime      INTEGER NOT NULL,
-    mtime      INTEGER NOT NULL,
+    data       TEXT NOT NULL DEFAULT '',
+    date       INTEGER NOT NULL,
     deleted_at INTEGER,
     icon       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_notes_parent ON notes(parent_id);
-CREATE INDEX IF NOT EXISTS idx_notes_mtime  ON notes(mtime DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-    title, content,
+    title, data,
     content = 'notes', content_rowid = 'rowid',
     tokenize = 'trigram'
 );
@@ -313,12 +382,12 @@ CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id);`
 // 由查询层的 deleted_at IS NULL 过滤，避免 FTS5 外部内容表同步不一致。
 const ftsTriggers = `
 CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+    INSERT INTO notes_fts(rowid, title, data) VALUES (new.rowid, new.title, new.data);
 END;
 CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
+    INSERT INTO notes_fts(notes_fts, rowid, title, data) VALUES ('delete', old.rowid, old.title, old.data);
 END;
 CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
-    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+    INSERT INTO notes_fts(notes_fts, rowid, title, data) VALUES ('delete', old.rowid, old.title, old.data);
+    INSERT INTO notes_fts(rowid, title, data) VALUES (new.rowid, new.title, new.data);
 END;`

@@ -27,7 +27,7 @@ export function useNotes() {
   }
   async function create(parent_id: string | null) {
     if (!repo) return null;
-    const n = await api.createNote(repo, { title: '', content: '', parent_id });
+    const n = await api.createNote(repo, { title: '', data: '', parent_id });
     await refresh();
     return n;
   }

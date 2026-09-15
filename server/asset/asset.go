@@ -23,11 +23,11 @@ var (
 
 // Metadata 单条附件元数据
 type Metadata struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Mime  string `json:"mime"`
-	Size  int64  `json:"size"`
-	Ctime int64  `json:"ctime"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Mime string `json:"mime"`
+	Size int64  `json:"size"`
+	Date int64  `json:"date"`
 }
 
 // ReadyPath 落盘路径 <dir>/assets/ab/cd/<sha>
@@ -51,11 +51,11 @@ func (a *Store) Status(db *sql.DB, id string) (string, error) {
 }
 
 // InsertUploading 插入 uploading 行；冲突（已存在）返回 false
-func (a *Store) InsertUploading(db *sql.DB, id, name, mime string, size, ctime int64) (bool, error) {
+func (a *Store) InsertUploading(db *sql.DB, id, name, mime string, size, date int64) (bool, error) {
 	res, err := db.Exec(
-		`INSERT INTO assets (id, name, mime, size, status, ctime)
+		`INSERT INTO assets (id, name, mime, size, status, date)
 		 VALUES (?, ?, ?, ?, 'uploading', ?)`,
-		id, name, mime, size, ctime,
+		id, name, mime, size, date,
 	)
 	if err != nil {
 		return false, nil // PRIMARY KEY 冲突
@@ -125,7 +125,7 @@ func (a *Store) CleanupUploading(db *sql.DB, id string) {
 // List 列出该仓库全部 ready 附件，按上传时间倒序
 func (a *Store) List(db *sql.DB) ([]Metadata, error) {
 	rows, err := db.Query(
-		`SELECT id, name, mime, size, ctime FROM assets WHERE status='ready' ORDER BY ctime DESC`,
+		`SELECT id, name, mime, size, date FROM assets WHERE status='ready' ORDER BY date DESC`,
 	)
 	if err != nil {
 		return nil, err
@@ -134,7 +134,7 @@ func (a *Store) List(db *sql.DB) ([]Metadata, error) {
 	out := []Metadata{}
 	for rows.Next() {
 		var m Metadata
-		if err := rows.Scan(&m.ID, &m.Name, &m.Mime, &m.Size, &m.Ctime); err != nil {
+		if err := rows.Scan(&m.ID, &m.Name, &m.Mime, &m.Size, &m.Date); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -146,8 +146,8 @@ func (a *Store) List(db *sql.DB) ([]Metadata, error) {
 func (a *Store) Metadata(db *sql.DB, id string) (*Metadata, error) {
 	var m Metadata
 	err := db.QueryRow(
-		`SELECT id, name, mime, size, ctime FROM assets WHERE id = ?`, id,
-	).Scan(&m.ID, &m.Name, &m.Mime, &m.Size, &m.Ctime)
+		`SELECT id, name, mime, size, date FROM assets WHERE id = ?`, id,
+	).Scan(&m.ID, &m.Name, &m.Mime, &m.Size, &m.Date)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
