@@ -1,5 +1,5 @@
-// 图标数据：初始化即加载全量 mdi 集合（本地静态资源 /icons/mdi.json）。
-// 全程本地、SW 预缓存、离线可用，不发外网请求。
+// 图标数据：初始化即加载全量 mdi 集合。
+// 图标集由后端托管（GET /icons/mdi.json，后端会自动更新它），全程本地、SW 预缓存、离线可用，不发外网请求。
 import { ref } from 'vue';
 import { addCollection, type IconifyJSON } from '@iconify/vue/offline';
 

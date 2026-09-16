@@ -7,6 +7,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://localhost:8080',
+      // 图标集由后端托管并自动更新（端口见 server/config.go 的 Addr）
+      '/icons/mdi.json': 'http://localhost:8080',
     },
   },
   plugins: [vue(), tailwindcss()],

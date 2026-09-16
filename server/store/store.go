@@ -271,12 +271,15 @@ func migrateRepo(db *sql.DB) error {
 
 	needsRebuild := hasContent || hasCtime || hasMtime || hasAssetCtime
 	if needsRebuild {
-		// 先删依赖旧列 content 的 FTS 触发器与表，改完列再重建
+		// 先删依赖旧列的 FTS 触发器与表，改完列再重建；
+		// idx_notes_mtime 也要先删：DROP COLUMN 遇到「被索引引用的列」会直接报错，
+		// 会留下半迁移的库（旧列还在、FTS 已删）。新索引在最后统一重建。
 		for _, stmt := range []string{
 			`DROP TRIGGER IF EXISTS notes_ai`,
 			`DROP TRIGGER IF EXISTS notes_ad`,
 			`DROP TRIGGER IF EXISTS notes_au`,
 			`DROP TABLE IF EXISTS notes_fts`,
+			`DROP INDEX IF EXISTS idx_notes_mtime`,
 		} {
 			if _, err := db.Exec(stmt); err != nil {
 				return err
