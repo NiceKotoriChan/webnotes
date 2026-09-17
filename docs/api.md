@@ -8,39 +8,48 @@
 - 没有返回值的动作用 `204`；其余 `200`。错误统一 `{ "error": "<msg>" }`。
 - 时间戳一律 Unix 毫秒；JSON 字段 snake_case；无鉴权。
 
+```
+/api/{repo}
+
+```
+
+rid 仓库
+nid
+tid
+
 ## Repos
 
 ```
-POST /api/repos/list                      → [{ id, name, date }]
-POST /api/repos/create        { name }    → Repo
-POST /api/repos/{repo}/rename { name }    → Repo（不动目录/链接）
-POST /api/repos/{repo}/delete             → 204（删整个仓库目录）
+POST /api/repos/list
+POST /api/repos/create?name={}
+POST /api/repos/rename?rid={}
+POST /api/repos/delete?rid={}
 ```
 
 ## Notes
 
 ```
-POST /api/repos/{repo}/notes/list    { q?, tag_id?, parent_id?, limit?, offset? } → [Note]
-POST /api/repos/{repo}/notes/create  { title, data, parent_id?, icon? }           → Note
-POST /api/repos/{repo}/notes/{id}/get                                             → Note
+POST /api/notes/list?rid={}
+POST /api/notes/create?rid={}
+POST /api/notes/update?rid={}&nid={}
 POST /api/repos/{repo}/notes/{id}/save   { title, data }                          → Note（自动保存，只动 title+data）
 POST /api/repos/{repo}/notes/{id}/move   { parent_id }                            → Note（null = 根；防环）
 POST /api/repos/{repo}/notes/{id}/icon   { icon }                                 → 204（null = 恢复自动匹配）
 POST /api/repos/{repo}/notes/{id}/delete { permanent? }                           → 204（默认软删除整棵子树）
 POST /api/repos/{repo}/notes/{id}/restore                                         → 204（连同子树）
-POST /api/repos/{repo}/trash/list                                                 → [Note]（回收站顶层）
+POST /api/repos/{repo}/trash/list
 ```
 
 **Note**：`{ id, parent_id, title, data, icon, date, deleted_at? }`
 
 `list` 的参数：
 
-| 参数 | 说明 |
-|---|---|
-| `q` | 全文搜索（FTS5 trigram，匹配 title + data；< 3 字符降级 LIKE，按 rank 排） |
-| `tag_id` | 按标签过滤 |
-| `parent_id` | 不传/null = 全部；`""` = 只看根节点；id = 该节点的直接子节点 |
-| `limit` / `offset` | 默认 `100` / `0`（limit 上限 1000） |
+| 参数               | 说明                                                                       |
+| ------------------ | -------------------------------------------------------------------------- |
+| `q`                | 全文搜索（FTS5 trigram，匹配 title + data；< 3 字符降级 LIKE，按 rank 排） |
+| `tag_id`           | 按标签过滤                                                                 |
+| `parent_id`        | 不传/null = 全部；`""` = 只看根节点；id = 该节点的直接子节点               |
+| `limit` / `offset` | 默认 `100` / `0`（limit 上限 1000）                                        |
 
 默认按 `date DESC`。`delete` 为软删除（标记 `deleted_at`），`permanent: true` 才真正级联删子树。
 
@@ -49,7 +58,7 @@ POST /api/repos/{repo}/trash/list                                               
 ```
 POST /api/repos/{repo}/tags/list            → [{ id, name }]
 POST /api/repos/{repo}/tags/create  { name }→ Tag
-POST /api/repos/{repo}/tags/{id}/rename { name } → Tag
+POST /api/repos/{repo}/tags/update?id={}&name={}
 POST /api/repos/{repo}/tags/{id}/delete     → 204（级联 note_tags）
 
 POST /api/repos/{repo}/notes/{id}/tags/list         → [Tag]

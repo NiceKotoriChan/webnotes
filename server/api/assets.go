@@ -15,7 +15,8 @@ import (
 	"webnotes/server/asset"
 )
 
-// GET /api/repos/:repo/assets — 列出全部 ready 附件func (s *Server) listAssets(c *gin.Context) {
+// GET /api/repos/:repo/assets — 列出全部 ready 附件
+func (s *Server) listAssets(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
 		return

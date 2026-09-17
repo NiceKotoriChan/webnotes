@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,9 +25,7 @@ type Note struct {
 
 const noteCols = `n.id, n.parent_id, n.title, n.data, n.date, n.deleted_at, n.icon`
 
-// POST /api/repos/:repo/notes/list
-// body: { q?, tag_id?, parent_id?, limit?, offset? }
-// parent_id：不传/null = 全部；"" = 只看根节点；id = 该节点的直接子节点
+// GET /api/repos/:repo/notes?q=&tag_id=&parent_id=&limit=&offset=
 func (s *Server) listNotes(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
@@ -34,23 +33,14 @@ func (s *Server) listNotes(c *gin.Context) {
 	}
 	defer db.Close()
 
-	var body struct {
-		Q        string  `json:"q"`
-		TagID    string  `json:"tag_id"`
-		ParentID *string `json:"parent_id"`
-		Limit    int     `json:"limit"`
-		Offset   int     `json:"offset"`
-	}
-	if !bindJSON(c, &body) {
-		return
-	}
-	q, tagID, parentID := body.Q, body.TagID, body.ParentID
-	limit, offset := body.Limit, body.Offset
+	q := c.Query("q")
+	tagID := c.Query("tag_id")
+	_, hasParent := c.GetQuery("parent_id")
+	parentID := c.Query("parent_id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	if limit <= 0 || limit > 1000 {
 		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
 	}
 
 	// trigram 需 ≥3 字符；短查询降级 LIKE
@@ -73,12 +63,12 @@ func (s *Server) listNotes(c *gin.Context) {
 		conds = append(conds, "nt.tag_id = ?")
 		args = append(args, tagID)
 	}
-	if parentID != nil {
-		if *parentID == "" {
+	if hasParent {
+		if parentID == "" {
 			conds = append(conds, "n.parent_id IS NULL") // 根节点
 		} else {
 			conds = append(conds, "n.parent_id = ?")
-			args = append(args, *parentID)
+			args = append(args, parentID)
 		}
 	}
 
@@ -148,7 +138,7 @@ func (s *Server) createNote(c *gin.Context) {
 	c.JSON(http.StatusCreated, n)
 }
 
-// POST /api/repos/:repo/notes/:id/get
+// GET /api/repos/:repo/notes/:id
 func (s *Server) getNote(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
@@ -204,7 +194,7 @@ func (s *Server) updateNote(c *gin.Context) {
 	c.JSON(http.StatusOK, n)
 }
 
-// POST /api/repos/:repo/notes/:id/move  body: { parent_id }  移动节点（parent_id=null 移到根）
+// PATCH /api/repos/:repo/notes/:id  body: { parent_id }  移动节点（parent_id=null 移到根）
 func (s *Server) moveNote(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
@@ -300,7 +290,8 @@ func (s *Server) deleteNote(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// POST /api/repos/:repo/notes/:id/restore  还原回收站里的笔记（连同其子树）func (s *Server) restoreNote(c *gin.Context) {
+// POST /api/repos/:repo/notes/:id/restore  还原回收站里的笔记（连同其子树）
+func (s *Server) restoreNote(c *gin.Context) {
 	db, _, ok := s.openRepo(c)
 	if !ok {
 		return
