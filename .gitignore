@@ -1,5 +1,7 @@
 node_modules/
 dist/
 data/
-.vscode/
-.Trash-*
+.*/
+ai/
+docs/
+

@@ -20,18 +20,18 @@
 需要 Go 1.26+、Node 20+、pnpm。
 
 ```bash
-# 终端 1：后端，监听 :8080（必须在 server/ 里运行）
+# 终端 1：后端 :8080（必须在 server/ 里运行）
 cd server && go run .
 
-# 终端 2：前端，监听 :5173
+# 终端 2：前端 :5173
 cd client && pnpm install && pnpm dev
 ```
 
-打开 http://localhost:5173 。细节（工作目录校验、代理、构建、验证方法）见 [docs/dev.md](docs/dev.md)。
+打开 http://localhost:5173 。运行细节与两个必知的环境坑见 [docs/dev.md](docs/dev.md)。
 
 ## 配置
 
-**没有配置文件、环境变量或命令行参数** —— 全部硬编码在 `server/config.go`（端口、数据目录、图标集来源与检查间隔等）。改配置 = 改常量 + 重启。完整清单见 [docs/api.md](docs/api.md#配置)。
+**没有配置文件、环境变量或命令行参数** —— 全部硬编码在 `server/config.go`。改配置 = 改常量 + 重启。清单见 [docs/dev.md](docs/dev.md#配置)。
 
 ## 目录结构
 
@@ -45,33 +45,25 @@ webnotes/
 │   ├── asset/           附件文件与状态机
 │   └── icons/           图标集本地副本与自动更新
 ├── client/              Vue 前端
-│   ├── src/
-│   │   ├── api.ts           HTTP 客户端
-│   │   ├── components/      界面组件
-│   │   ├── composables/     模块级共享状态
-│   │   └── lib/             纯函数工具
-│   └── public/          manifest 与 Service Worker
+│   └── src/             api.ts / components/ / composables/ / lib/
 ├── data/                运行时数据（gitignore）：仓库目录、repos.json、icons/
-└── docs/                文档（见下）
+├── docs/                文档（见下）
+└── AGENTS.md            给 AI 助手的项目规则
 ```
 
 ## 文档
 
-入口是 [docs/README.md](docs/README.md)。文档平铺在 `docs/` 下，权威性看每篇文首：
+`docs/` 一篇文章只讲一层，按设计层次命名；权威性看文首。
 
-| 文档 | 定位 |
-|---|---|
-| [api.md](docs/api.md) | **权威** · HTTP 接口契约 |
-| [model.md](docs/model.md) | **权威** · 数据模型与行为语义 |
-| [schema.md](docs/schema.md) | **权威** · 数据库 schema 与磁盘布局 |
-| [client.md](docs/client.md) | **权威** · 前端架构 |
-| [dev.md](docs/dev.md) | 操作指南 · 本地开发、构建与验证 |
-| [plan-deploy-layout.md](docs/plan-deploy-layout.md) | 草稿 · 打包布局设想 |
-| [plan-ui.md](docs/plan-ui.md) | 草稿 · 界面规划 |
+| 文档 | 层次 | 内容 |
+|---|---|---|
+| [schema.md](docs/schema.md) | 数据库逻辑 | 表结构、列、索引、FTS 与触发器、标签改写语句、建库策略（**schema 的真相源**） |
+| [model.md](docs/model.md) | 后端对象逻辑 | `Repo` / `Note` / `AssetMeta` 与行为语义：软删递归、还原、防环、时间戳刷新、附件状态机 |
+| [api.md](docs/api.md) | 接口逻辑 | HTTP 契约：只用 GET / POST 的 19 条路由、错误码、查询参数、静态资源 |
+| [ui.md](docs/ui.md) | 视图逻辑 | 前端分层、数据流、编辑器与 PWA 机制、快捷键 |
+| [dev.md](docs/dev.md) | 操作指南 | 运行、配置清单、两个必知的环境坑、验证与构建、数据目录 |
 
-权威文档描述系统**当前的真实行为**；改代码时必须在同一个提交里同步对应文档。`status:` 与 `plan-` 前缀标识尚未落地的想法。
-
-> ⚠️ **当前例外**：`schema.md`、`api.md`、`model.md` 已按新设计改完，但代码尚未跟进（字段改名、标签收敛成一列、路由改为只用 GET/POST），并且现在**编译不过**。在实现落地前，这三篇描述的是目标而非现状 —— 差异清单见 [docs/README.md](docs/README.md)。
+> ⚠️ **当前状态：文档领先于代码。** `schema.md` / `model.md` / `api.md` 描述的是已定稿的新设计，代码尚未跟进（时间字段拆 `created_at` + `updated_at`、`data` → `content`、标签从两张表收敛成 `notes.tags` 一列、路由改为只用 GET/POST 的 19 条、删掉 `migrateRepo`），而且现在**编译不过**（`main.go` 用四个参数调用 `api.NewRouter`，签名只收两个）。落地后删掉本节。[ui.md](docs/ui.md) 与 [dev.md](docs/dev.md) 描述当前状态，落地时要一起改。
 
 ## 许可
 
