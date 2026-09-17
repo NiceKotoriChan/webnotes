@@ -341,7 +341,8 @@ func migrateRepo(db *sql.DB) error {
 	return nil
 }
 
-// RepoSchema 每个仓库 data.db 的结构，与 docs/data.sql 保持一致
+// RepoSchema 每个仓库 data.db 的结构。这里是 schema 的真相源，
+// docs/spec/schema.md 是它的可读版本，改这里记得同步那份文档。
 const RepoSchema = `
 CREATE TABLE IF NOT EXISTS assets (
     id     TEXT PRIMARY KEY,

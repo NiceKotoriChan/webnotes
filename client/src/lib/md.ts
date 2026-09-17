@@ -5,7 +5,7 @@
 import { marked } from 'marked';
 import TurndownService from 'turndown';
 
-// marked 全程启用 GFM + breaks（与 MarkdownViewer 保持一致）
+// marked 全程启用 GFM + breaks（单个换行即 <br>，与编辑器的所见即所得行为对齐）
 marked.setOptions({ gfm: true, breaks: true });
 
 const turndown = new TurndownService({
