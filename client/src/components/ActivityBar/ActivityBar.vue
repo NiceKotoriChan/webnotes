@@ -1,17 +1,17 @@
 <script setup lang="ts">
-// 活动栏：左侧一列图标按钮，打开面板/切换仓库/切换主题
+// 活动栏（第 1 区块）：最左一列图标按钮 —— 仓库、搜索、五个侧栏区块、主题。
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRepos } from '../../composables/useRepos';
 import { useCurrentRepo, LAST_REPO_KEY } from '../../composables/useCurrentRepo';
 import { useTheme } from '../../composables/useTheme';
+import { PANELS, type Panel } from '../../lib/panels';
 import type { Repo } from '../../api';
 import RepoMenu from './RepoMenu.vue';
 
-defineProps<{ activeView: 'explorer' | 'assets' | 'trash' }>();
+defineProps<{ view: Panel }>();
 const emit = defineEmits<{
+  (e: 'set-view', p: Panel): void;
   (e: 'open-search'): void;
-  (e: 'toggle-assets'): void;
-  (e: 'toggle-trash'): void;
 }>();
 
 const { repos, create: createRepoApi, rename: renameRepoApi, remove: removeRepoApi } = useRepos();
@@ -78,14 +78,8 @@ async function remove(r: Repo) {
   <nav class="bar">
     <!-- 仓库切换 -->
     <div class="relative">
-      <button
-        ref="btnEl"
-        class="icon-btn"
-        :class="{ active: repoOpen }"
-        title="切换仓库"
-        @click="repoOpen = !repoOpen"
-      >
-        <Icon icon="mdi:folder" width="20" height="20" />
+      <button ref="btnEl" class="icon-btn" :class="{ active: repoOpen }" title="切换仓库" @click="repoOpen = !repoOpen">
+        <Icon icon="mdi:folder-multiple-outline" width="20" height="20" />
       </button>
 
       <div v-if="repoOpen" ref="menuEl" class="popover">
@@ -106,20 +100,25 @@ async function remove(r: Repo) {
       <Icon icon="mdi:magnify" width="20" height="20" />
     </button>
 
-    <!-- 附件（侧边栏面板切换） -->
-    <button class="icon-btn" :class="{ active: activeView === 'assets' }" title="附件" @click="emit('toggle-assets')">
-      <Icon icon="mdi:paperclip" width="20" height="20" />
+    <span class="divider"></span>
+
+    <!-- 五个侧栏区块 -->
+    <button
+      v-for="p in PANELS"
+      :key="p.id"
+      class="icon-btn"
+      :class="{ active: view === p.id }"
+      :title="p.title"
+      @click="emit('set-view', p.id)"
+    >
+      <Icon :icon="'mdi:' + p.icon" width="20" height="20" />
     </button>
 
-    <!-- 回收站（侧边栏面板切换） -->
-    <button class="icon-btn" :class="{ active: activeView === 'trash' }" title="回收站" @click="emit('toggle-trash')">
-      <Icon icon="mdi:delete" width="20" height="20" />
-    </button>
+    <span class="spacer"></span>
 
     <!-- 主题切换 -->
     <button class="icon-btn" :title="theme === 'dark' ? '切换为亮色模式' : '切换为暗色模式'" @click="toggleTheme">
-      <Icon v-if="theme === 'dark'" icon="mdi:white-balance-sunny" width="20" height="20" />
-      <Icon v-else icon="mdi:weather-night" width="20" height="20" />
+      <Icon :icon="theme === 'dark' ? 'mdi:white-balance-sunny' : 'mdi:weather-night'" width="20" height="20" />
     </button>
   </nav>
 </template>
@@ -138,6 +137,15 @@ async function remove(r: Repo) {
 }
 .relative {
   position: relative;
+}
+.spacer {
+  flex: 1;
+}
+.divider {
+  width: 24px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-muted);
 }
 .icon-btn {
   display: flex;

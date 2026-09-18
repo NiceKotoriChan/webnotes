@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* 预览区版式：github-markdown-css 的布局规则 + 我们自己按 class 挂的颜色变量 */
+@import "github-markdown-css/github-markdown.css";
+@import "./markdown-theme.css";
 
 @font-face {
   font-family: 'Inter';
@@ -192,58 +195,39 @@ a, .link {
 }
 a:hover, .link:hover { text-decoration: underline; }
 
-/* —— TipTap 编辑器内容 —— */
-.tiptap:focus { outline: none; }
-.tiptap {
-  min-height: 100%;
-  padding: 16px;
+/* —— Markdown 预览（markdown-it 渲染 / github-markdown-css 版式）—— */
+/* 只加容器层的内边距与透明背景，正文样式全交给 .markdown-body */
+.md-preview {
+  background: transparent;
+  padding: 16px 24px 64px;
 }
-.tiptap h1, .tiptap h2, .tiptap h3 {
-  margin: 1em 0 0.5em;
-  font-weight: 600;
-  line-height: 1.25;
+.md-preview h1:first-child,
+.md-preview h2:first-child {
+  margin-top: 0;
 }
-.tiptap p { margin: 0 0 1em; line-height: 1.6; }
-.tiptap ul, .tiptap ol {
-  padding-left: 2em;
-  margin: 0 0 1em;
+/* 预览里的图片最多撑满栏宽；附件是仓库内同源 URL，不会被当成外链拦掉 */
+.md-preview img {
+  max-width: 100%;
 }
-.tiptap ul { list-style: disc; }
-.tiptap ol { list-style: decimal; }
-.tiptap blockquote {
-  margin: 0 0 1em;
-  padding: 0 1em;
-  border-left: 4px solid var(--border-default);
-  color: var(--fg-muted);
-}
-.tiptap code {
-  padding: 0.2em 0.4em;
-  background: var(--canvas-subtle);
-  border-radius: 6px;
+
+/* —— Markdown 源码框 —— */
+.md-source {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 16px 24px 64px;
   font-family: var(--font-mono);
-  font-size: 0.85em;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--fg-default);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  resize: none;
+  tab-size: 2;
 }
-.tiptap pre {
-  padding: 16px;
-  background: var(--canvas-subtle);
-  border-radius: 6px;
-  overflow-x: auto;
-  margin: 0 0 1em;
+.md-source:focus {
+  border: none;
+  box-shadow: none;
 }
-.tiptap pre code { padding: 0; background: transparent; }
-.tiptap a { color: var(--accent-fg); }
-.tiptap a:hover { text-decoration: underline; }
-.tiptap img { max-width: 100%; }
-.tiptap ul[data-type="taskList"] {
-  list-style: none;
-  padding-left: 0;
-}
-.tiptap ul[data-type="taskList"] li {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.tiptap ul[data-type="taskList"] input[type="checkbox"] {
-  margin-top: 4px;
-  accent-color: var(--accent-emphasis);
-}
+

@@ -1,17 +1,21 @@
 <script setup lang="ts">
-// 主工作区：ActivityBar | SideBar（TreePanel + TagsPanel 或 AssetPanel）| Editor
+// 主工作区：活动栏 | 侧栏（五个区块之一）| 主区（总览或编辑器）。
+// 区块清单在 lib/panels.ts，加区块只改那里 + 这里挂一个组件。
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useNotes } from '../composables/useNotes';
 import { useTags } from '../composables/useTags';
 import { lastNoteKey } from '../composables/useCurrentRepo';
 import * as api from '../api';
-import type { Note, Repo, Tag } from '../api';
+import type { Note, NotePatch, Repo } from '../api';
 import { buildTree } from '../lib/tree';
+import { initialPanel, rememberPanel, type Panel } from '../lib/panels';
 import ActivityBar from './ActivityBar/ActivityBar.vue';
 import TreePanel from './SideBar/TreePanel.vue';
+import CalendarPanel from './SideBar/CalendarPanel.vue';
 import TagsPanel from './SideBar/TagsPanel.vue';
 import AssetPanel from './SideBar/AssetPanel.vue';
 import TrashPanel from './SideBar/TrashPanel.vue';
+import OverviewPanel from './Overview/OverviewPanel.vue';
 import NoteEditor from './Editor/NoteEditor.vue';
 import SearchPanel from './ActivityBar/SearchPanel.vue';
 
@@ -25,51 +29,62 @@ const selected = ref<Note | null>(null);
 const errMsg = ref('');
 const loading = ref(false);
 const collapsed = ref<Set<string>>(new Set());
-const linkedIds = ref<Set<string>>(new Set());
-const activeView = ref<'explorer' | 'assets' | 'trash'>('explorer');
+const view = ref<Panel>(initialPanel());
 const searchOpen = ref(false);
 
 const tree = computed(() => buildTree(notes.notes.value));
 
-// 仓库切换时加载笔记 + 标签
-watch(repoId, (rid) => {
-  if (!rid) return;
-  loading.value = true;
-  notes.load(rid).finally(() => (loading.value = false));
-  tags.load(rid);
-}, { immediate: true });
+function setView(p: Panel) {
+  view.value = p;
+  rememberPanel(p);
+}
 
-// 当前笔记的标签关联
-watch([repoId, () => selected.value?.id], () => {
-  const rid = repoId.value;
-  const nid = selected.value?.id;
-  if (!rid || !nid) {
-    linkedIds.value = new Set();
-    return;
-  }
-  api.listNoteTags(rid, nid)
-    .then((ts) => (linkedIds.value = new Set(ts.map((t) => t.id))))
-    .catch(() => {});
-});
+// 仓库切换时加载笔记 + 标签
+watch(
+  repoId,
+  (rid) => {
+    if (!rid) return;
+    loading.value = true;
+    notes.load(rid).finally(() => (loading.value = false));
+    tags.load(rid);
+  },
+  { immediate: true },
+);
 
 // notes 刷新后，把 selected 指向新对象
-watch(() => notes.notes.value, (list) => {
-  if (!selected.value) return;
-  const id = selected.value.id;
-  const fresh = list.find((x) => x.id === id);
-  if (fresh && fresh !== selected.value) selected.value = fresh;
-});
+watch(
+  () => notes.notes.value,
+  (list) => {
+    if (!selected.value) return;
+    const fresh = list.find((x) => x.id === selected.value!.id);
+    if (fresh && fresh !== selected.value) selected.value = fresh;
+  },
+);
 
 // 首次加载完笔记后，恢复上次打开的笔记
 let didRestore = false;
-watch(() => notes.notes.value, (list) => {
-  const rid = repoId.value;
-  if (didRestore || list.length === 0 || !rid) return;
-  didRestore = true;
-  const nid = localStorage.getItem(lastNoteKey(rid));
-  const found = nid ? list.find((n) => n.id === nid) : undefined;
-  if (found) selected.value = found;
-});
+watch(
+  () => notes.notes.value,
+  (list) => {
+    const rid = repoId.value;
+    if (didRestore || list.length === 0 || !rid) return;
+    didRestore = true;
+    const nid = localStorage.getItem(lastNoteKey(rid));
+    const found = nid ? list.find((n) => n.id === nid) : undefined;
+    if (found) selected.value = found;
+  },
+);
+
+async function guarded(fn: () => Promise<unknown>) {
+  errMsg.value = '';
+  try {
+    await fn();
+    return true;
+  } catch (e: any) {
+    errMsg.value = e.message;
+    return false;
+  }
+}
 
 async function createRoot() {
   return create(null);
@@ -81,15 +96,11 @@ async function createChild(parent: Note) {
   return create(parent.id);
 }
 async function create(parent_id: string | null) {
-  const rid = repoId.value;
-  if (!rid) return;
-  errMsg.value = '';
-  try {
+  if (!repoId.value) return;
+  await guarded(async () => {
     const n = await notes.create(parent_id);
     if (n) selectNote(n);
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
+  });
 }
 
 function selectNote(n: Note) {
@@ -99,127 +110,80 @@ function selectNote(n: Note) {
 }
 
 async function remove(n: Note) {
-  try {
+  await guarded(async () => {
     await notes.remove(n.id);
     if (selected.value?.id === n.id) {
       selected.value = null;
       const rid = repoId.value;
       if (rid) localStorage.removeItem(lastNoteKey(rid));
     }
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
+  });
 }
 
-async function renameNote(n: Note, title: string) {
-  const rid = repoId.value;
-  if (!rid) return;
-  errMsg.value = '';
-  try {
-    await api.updateNote(rid, n.id, { title, data: n.data });
-    await notes.refresh();
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
+async function patchNote(n: Note, patch: NotePatch) {
+  await guarded(() => notes.update(n.id, patch));
 }
 
-async function moveNote(draggedId: string, targetId: string) {
-  const rid = repoId.value;
-  if (!rid) return;
-  errMsg.value = '';
-  try {
-    await api.moveNote(rid, draggedId, targetId);
+const renameNote = (n: Note, title: string) => patchNote(n, { title });
+const moveNote = (draggedId: string, targetId: string) =>
+  guarded(async () => {
+    await api.updateNote(repoId.value!, draggedId, { parent_id: targetId });
     const next = new Set(collapsed.value);
     next.delete(targetId);
     collapsed.value = next;
     await notes.refresh();
-  } catch (e: any) {
-    errMsg.value = e.message;
-    await notes.refresh();
-  }
+  });
+const setNoteIcon = (n: Note, icon: string | null) => patchNote(n, { icon });
+
+// —— 标签：都作用在「当前笔记」或「全体笔记」上，标签自身不是实体 ——
+async function toggleTag(name: string) {
+  const sel = selected.value;
+  if (!sel || !repoId.value) return;
+  const cur = sel.tags ?? [];
+  const next = cur.includes(name) ? cur.filter((t) => t !== name) : [...cur, name];
+  await guarded(async () => {
+    await notes.update(sel.id, { tags: next });
+    // 标签是派生的：勾选可能让这个标签第一次出现，也可能让它彻底消失，所以每次都重拉
+    tags.load(repoId.value!);
+  });
 }
 
-async function setNoteIcon(n: Note, icon: string | null) {
+async function createTag(name: string) {
+  const sel = selected.value;
+  if (!sel) return;
+  const cur = sel.tags ?? [];
+  if (cur.includes(name)) return;
+  await toggleTag(name);
+}
+
+async function renameTag(from: string) {
   const rid = repoId.value;
   if (!rid) return;
-  errMsg.value = '';
-  try {
-    await api.setNoteIcon(rid, n.id, icon);
+  const to = prompt(`把标签「${from}」改名为`, from);
+  if (to === null) return;
+  const name = to.trim().replace(/^#/, '');
+  if (!name || name === from) return;
+  await guarded(async () => {
+    await tags.rename(rid, from, name);
     await notes.refresh();
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
+  });
+}
+
+async function deleteTag(name: string) {
+  const rid = repoId.value;
+  if (!rid) return;
+  if (!confirm(`把标签「${name}」从所有笔记上移除？`)) return;
+  await guarded(async () => {
+    await tags.remove(rid, name);
+    await notes.refresh();
+  });
 }
 
 function toggle(n: Note) {
   const next = new Set(collapsed.value);
-  next.has(n.id) ? next.delete(n.id) : next.add(n.id);
+  if (next.has(n.id)) next.delete(n.id);
+  else next.add(n.id);
   collapsed.value = next;
-}
-
-async function addTag(name: string) {
-  const rid = repoId.value;
-  if (!rid) return;
-  errMsg.value = '';
-  try {
-    await tags.create(rid, name);
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
-}
-
-async function deleteTag(t: Tag) {
-  const rid = repoId.value;
-  if (!rid) return;
-  if (!confirm(`删除标签「${t.name}」？`)) return;
-  try {
-    await tags.remove(rid, t.id);
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
-}
-
-async function renameTag(t: Tag) {
-  const name = prompt('标签名', t.name);
-  if (name === null || !name.trim() || name.trim() === t.name) return;
-  const rid = repoId.value;
-  if (!rid) return;
-  errMsg.value = '';
-  try {
-    await tags.rename(rid, t.id, name.trim());
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
-}
-
-async function toggleLink(t: Tag) {
-  const rid = repoId.value;
-  const sel = selected.value;
-  if (!rid || !sel) return;
-  errMsg.value = '';
-  try {
-    if (linkedIds.value.has(t.id)) {
-      await api.removeNoteTag(rid, sel.id, t.id);
-      const next = new Set(linkedIds.value);
-      next.delete(t.id);
-      linkedIds.value = next;
-    } else {
-      await api.addNoteTag(rid, sel.id, t.id);
-      const next = new Set(linkedIds.value);
-      next.add(t.id);
-      linkedIds.value = next;
-    }
-  } catch (e: any) {
-    errMsg.value = e.message;
-  }
-}
-
-function toggleAssets() {
-  activeView.value = activeView.value === 'assets' ? 'explorer' : 'assets';
-}
-
-function toggleTrash() {
-  activeView.value = activeView.value === 'trash' ? 'explorer' : 'trash';
 }
 
 // Ctrl+P 打开搜索
@@ -235,58 +199,66 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
 <template>
   <div class="workspace">
-    <ActivityBar
-      :active-view="activeView"
-      @open-search="searchOpen = true"
-      @toggle-assets="toggleAssets"
-      @toggle-trash="toggleTrash"
-    />
+    <ActivityBar :view="view" @set-view="setView" @open-search="searchOpen = true" />
 
     <aside class="sidebar">
-      <template v-if="activeView === 'explorer'">
-        <TreePanel
-          :repo-name="repo?.name ?? null"
-          :notes="tree"
-          :selected-id="selected?.id ?? null"
-          :collapsed="collapsed"
-          :on-select="selectNote"
-          :on-toggle="toggle"
-          :on-add-child="createChild"
-          :on-delete="remove"
-          :on-rename="renameNote"
-          :on-move="moveNote"
-          :on-set-icon="setNoteIcon"
-          :on-create-root="createRoot"
-          :loading="loading"
-          :repo-id="repoId"
-        />
-        <TagsPanel
-          :repo-id="repoId"
-          :selected="selected"
-          :linked-ids="linkedIds"
-          :on-link="toggleLink"
-          :on-create="addTag"
-          :on-rename="renameTag"
-          :on-delete="deleteTag"
-        />
-      </template>
-      <AssetPanel v-else-if="activeView === 'assets'" :repo-id="repoId" />
+      <p v-if="errMsg" class="err">{{ errMsg }}</p>
+
+      <TreePanel
+        v-if="view === 'tree'"
+        :repo-name="repo?.name ?? null"
+        :notes="tree"
+        :selected-id="selected?.id ?? null"
+        :collapsed="collapsed"
+        :on-select="selectNote"
+        :on-toggle="toggle"
+        :on-add-child="createChild"
+        :on-delete="remove"
+        :on-rename="renameNote"
+        :on-move="moveNote"
+        :on-set-icon="setNoteIcon"
+        :on-create-root="createRoot"
+        :loading="loading"
+        :repo-id="repoId"
+      />
+
+      <CalendarPanel
+        v-else-if="view === 'calendar'"
+        :notes="notes.notes.value"
+        :selected-id="selected?.id ?? null"
+        :on-select="selectNote"
+      />
+
+      <TagsPanel
+        v-else-if="view === 'tags'"
+        :repo-id="repoId"
+        :selected="selected"
+        :on-toggle="toggleTag"
+        :on-create="createTag"
+        :on-rename="renameTag"
+        :on-delete="deleteTag"
+      />
+
+      <AssetPanel v-else-if="view === 'assets'" :repo-id="repoId" />
+
       <TrashPanel v-else :repo-id="repoId" @changed="notes.refresh()" />
     </aside>
 
-    <section class="editor">
+    <section class="main">
       <NoteEditor
         v-if="selected && repoId"
         :key="selected.id"
-        :repo="repoId || ''"
+        :repo="repoId"
         :note="selected"
-        @saved="notes.refresh()"
+        :on-saved="notes.refresh"
       />
-      <div v-else-if="!repoId" class="placeholder">
-        <p>还没有打开仓库</p>
-        <p class="hint">点击左侧仓库图标，新建或打开一个仓库开始</p>
-      </div>
-      <div v-else class="placeholder">选择左侧笔记，或点击「新建」</div>
+      <OverviewPanel
+        v-else
+        :repo="repo"
+        :notes="notes.notes.value"
+        :tags="tags.tags.value"
+        :on-select="selectNote"
+      />
     </section>
   </div>
 
@@ -312,7 +284,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
   background: var(--canvas-subtle);
   border-right: 1px solid var(--border-muted);
 }
-.editor {
+.sidebar .err {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--danger-fg);
+  border-bottom: 1px solid var(--border-muted);
+}
+.main {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -320,20 +299,5 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
   min-height: 0;
   height: 100%;
   background: var(--canvas-default);
-}
-.placeholder {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--fg-muted);
-  gap: 8px;
-}
-.placeholder p {
-  margin: 0;
-}
-.placeholder .hint {
-  font-size: 13px;
 }
 </style>

@@ -39,12 +39,6 @@ func main() {
 	}
 	ic.Start(ctx, IconCheckInterval)
 
-	// 图标规则：自定义规则缺失时先用默认规则灌一份，之后由前端通过 /api 改它
-	rules := icons.NewRules(iconDir, IconRulesDefaultFile, IconRulesCustomFile)
-	if err := rules.Ensure(); err != nil {
-		log.Printf("图标规则初始化失败（回退到默认设置的接口会报错）: %v", err)
-	}
-
 	// 逐仓库对账附件状态（清孤儿 tmp、uploading→ready、deleting 收尾）
 	for _, ri := range s.ListRepos() {
 		db, err := s.OpenRepo(ri.ID)
@@ -60,7 +54,7 @@ func main() {
 
 	log.Printf("webnotes 数据目录: %s", dataDir)
 	log.Printf("图标集 %s: %s（每 %s 检查更新）", "/icons/"+IconSetFile, ic.Describe(), IconCheckInterval)
-	log.Printf("图标规则: %s / %s（目录 %s）", IconRulesDefaultFile, IconRulesCustomFile, iconDir)
+	log.Printf("图标规则: %s / %s（只做静态下发，目录 %s）", IconRulesDefaultFile, IconRulesCustomFile, iconDir)
 	log.Printf("listening on %s", Addr)
 
 	// /icons/* 由这里直接托管：图标集在内存里（后台会自动更新），两个规则文件每次现读盘
@@ -68,6 +62,6 @@ func main() {
 	mux.Handle("/icons/"+IconSetFile, ic)
 	mux.Handle("/icons/"+IconRulesDefaultFile, icons.Static(iconDir, IconRulesDefaultFile))
 	mux.Handle("/icons/"+IconRulesCustomFile, icons.Static(iconDir, IconRulesCustomFile))
-	mux.Handle("/", api.NewRouter(s, a, rules))
+	mux.Handle("/", api.NewRouter(s, a))
 	log.Fatal(http.ListenAndServe(Addr, mux))
 }

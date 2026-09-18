@@ -1,8 +1,7 @@
 <script setup lang="ts">
 // 图标选择器：搜索全部 mdi 图标，或从常用图标里挑；支持恢复自动匹配
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { PRESET_ICONS } from '../../lib/autoIcon';
-import { allMdiNames } from '../../lib/icons';
+import { PRESET_ICONS, allMdiNames } from '../../lib/icons';
 
 const props = defineProps<{ current: string | null }>();
 const emit = defineEmits<{

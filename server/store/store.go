@@ -181,7 +181,7 @@ func (s *Store) DeleteRepo(id string) error {
 	return s.saveLocked()
 }
 
-// OpenRepo 打开已有仓库的 data.db 并确保 schema 与迁移；仓库不存在返回 ErrNotFound（不会新建空库）
+// OpenRepo 打开已有仓库的 data.db 并确保 schema 就位；仓库不存在返回 ErrNotFound（不会新建空库）
 func (s *Store) OpenRepo(id string) (*sql.DB, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return nil, ErrNotFound
@@ -198,10 +198,6 @@ func (s *Store) OpenRepo(id string) (*sql.DB, error) {
 		return nil, err
 	}
 	if _, err := db.Exec(RepoSchema); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := migrateRepo(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -222,176 +218,56 @@ func openDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// columnExists 判断表是否已有某列
-func columnExists(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			cid       int
-			name      string
-			typ       string
-			notnull   int
-			dfltValue sql.NullString
-			pk        int
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
-			return false, err
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
-}
-
-// migrateRepo 迁移旧库到新 schema（幂等）：
+// RepoSchema 每个仓库 data.db 的结构。SQL 与 spec/schema.md 里的那段一致，
+// 只多 IF NOT EXISTS（便于每次打开重复执行）。改这里要同步那份文档。
 //
-//	notes: content→data, ctime→date, 删 mtime；assets: ctime→date；FTS 随 content→data 重建。
-func migrateRepo(db *sql.DB) error {
-	hasContent, err := columnExists(db, "notes", "content")
-	if err != nil {
-		return err
-	}
-	hasCtime, err := columnExists(db, "notes", "ctime")
-	if err != nil {
-		return err
-	}
-	hasMtime, err := columnExists(db, "notes", "mtime")
-	if err != nil {
-		return err
-	}
-	hasAssetCtime, err := columnExists(db, "assets", "ctime")
-	if err != nil {
-		return err
-	}
-
-	needsRebuild := hasContent || hasCtime || hasMtime || hasAssetCtime
-	if needsRebuild {
-		// 先删依赖旧列的 FTS 触发器与表，改完列再重建；
-		// idx_notes_mtime 也要先删：DROP COLUMN 遇到「被索引引用的列」会直接报错，
-		// 会留下半迁移的库（旧列还在、FTS 已删）。新索引在最后统一重建。
-		for _, stmt := range []string{
-			`DROP TRIGGER IF EXISTS notes_ai`,
-			`DROP TRIGGER IF EXISTS notes_ad`,
-			`DROP TRIGGER IF EXISTS notes_au`,
-			`DROP TABLE IF EXISTS notes_fts`,
-			`DROP INDEX IF EXISTS idx_notes_mtime`,
-		} {
-			if _, err := db.Exec(stmt); err != nil {
-				return err
-			}
-		}
-	}
-	if hasContent {
-		if _, err := db.Exec(`ALTER TABLE notes RENAME COLUMN content TO data`); err != nil {
-			return err
-		}
-	}
-	if hasCtime {
-		if _, err := db.Exec(`ALTER TABLE notes RENAME COLUMN ctime TO date`); err != nil {
-			return err
-		}
-	}
-	if hasMtime {
-		if _, err := db.Exec(`ALTER TABLE notes DROP COLUMN mtime`); err != nil {
-			return err
-		}
-	}
-	if hasAssetCtime {
-		if _, err := db.Exec(`ALTER TABLE assets RENAME COLUMN ctime TO date`); err != nil {
-			return err
-		}
-	}
-	if needsRebuild {
-		if _, err := db.Exec(`CREATE VIRTUAL TABLE notes_fts USING fts5(title, data, content='notes', content_rowid='rowid', tokenize='trigram')`); err != nil {
-			return err
-		}
-		if _, err := db.Exec(ftsTriggers); err != nil {
-			return err
-		}
-		if _, err := db.Exec(`INSERT INTO notes_fts(notes_fts) VALUES('rebuild')`); err != nil {
-			return err
-		}
-	}
-
-	// 更老的库可能缺 deleted_at / icon，补齐
-	for _, col := range []struct{ name, ddl string }{
-		{"deleted_at", `ALTER TABLE notes ADD COLUMN deleted_at INTEGER`},
-		{"icon", `ALTER TABLE notes ADD COLUMN icon TEXT`},
-	} {
-		has, err := columnExists(db, "notes", col.name)
-		if err != nil {
-			return err
-		}
-		if !has {
-			if _, err := db.Exec(col.ddl); err != nil {
-				return err
-			}
-		}
-	}
-
-	// date 索引：旧库改名后才有 date 列，放这里统一建
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_notes_date ON notes(date DESC)`); err != nil {
-		return err
-	}
-	return nil
-}
-
-// RepoSchema 每个仓库 data.db 的结构。这里是 schema 的真相源，
-// docs/spec/schema.md 是它的可读版本，改这里记得同步那份文档。
+// 不做迁移：换结构 = 删掉库重建。
 const RepoSchema = `
 CREATE TABLE IF NOT EXISTS assets (
     id     TEXT PRIMARY KEY,
+    date   INTEGER NOT NULL,
     name   TEXT NOT NULL,
     mime   TEXT NOT NULL,
     size   INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'uploading'
-           CHECK (status IN ('uploading','ready','deleting')),
-    date   INTEGER NOT NULL
+           CHECK (status IN ('uploading','ready','deleting'))
 );
 
 CREATE TABLE IF NOT EXISTS notes (
     id         TEXT PRIMARY KEY,
     parent_id  TEXT REFERENCES notes(id) ON DELETE CASCADE,
-    title      TEXT NOT NULL DEFAULT '',
-    data       TEXT NOT NULL DEFAULT '',
-    date       INTEGER NOT NULL,
-    deleted_at INTEGER,
-    icon       TEXT
+
+    title   TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    deleted_at  INTEGER,
+
+    tags    TEXT,
+    icon    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_notes_parent ON notes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-    title, data,
+    title, content,
     content = 'notes', content_rowid = 'rowid',
     tokenize = 'trigram'
 );
-` + ftsTriggers + `
-CREATE TABLE IF NOT EXISTS tags (
-    id   TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
-);
-CREATE TABLE IF NOT EXISTS note_tags (
-    note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    tag_id  TEXT NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
-    PRIMARY KEY (note_id, tag_id)
-);
-CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id);`
+` + ftsTriggers
 
-// ftsTriggers 维护 notes ↔ notes_fts 同步（无条件）。软删除的笔记仍在索引中，
-// 由查询层的 deleted_at IS NULL 过滤，避免 FTS5 外部内容表同步不一致。
+// ftsTriggers 维护 notes ↔ notes_fts 同步。软删的笔记仍留在索引里，由查询层的
+// deleted_at IS NULL 过滤。notes_au 的 UPDATE OF 是必需的：没有它，只改标签、
+// 只刷 updated_at、递归软删子树都会白白重索引一遍。
 const ftsTriggers = `
 CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-    INSERT INTO notes_fts(rowid, title, data) VALUES (new.rowid, new.title, new.data);
+    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
 END;
 CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, data) VALUES ('delete', old.rowid, old.title, old.data);
+    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
 END;
-CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, data) VALUES ('delete', old.rowid, old.title, old.data);
-    INSERT INTO notes_fts(rowid, title, data) VALUES (new.rowid, new.title, new.data);
+CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE OF title, content ON notes BEGIN
+    INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES ('delete', old.rowid, old.title, old.content);
+    INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
 END;`

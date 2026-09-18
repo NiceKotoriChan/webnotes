@@ -3,8 +3,8 @@
 import { ref, watch, nextTick } from 'vue';
 import type { Note } from '../../api';
 import type { TreeNode } from '../../lib/tree';
-import { setDraggedId, getDraggedId } from '../../lib/drag';
-import { autoIcon } from '../../lib/autoIcon';
+import { getDraggedId, setDraggedId } from '../../lib/drag';
+import { matchIcon } from '../../lib/rules';
 import IconPicker from './IconPicker.vue';
 
 defineOptions({ name: 'TreeList' });
@@ -40,8 +40,9 @@ watch(editingId, async (id) => {
   }
 });
 
+// icon 为 null 时走后端下发的规则文件（见 lib/rules.ts）
 function iconFor(n: Note): string {
-  return n.icon || autoIcon(n.title);
+  return n.icon || matchIcon(n.title);
 }
 
 function onPickIcon(icon: string | null) {

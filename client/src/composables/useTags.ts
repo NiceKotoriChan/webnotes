@@ -1,8 +1,8 @@
 import { ref } from 'vue';
 import * as api from '../api';
-import type { Tag } from '../api';
 
-const tags = ref<Tag[]>([]);
+// 标签不是实体：列表是后端派生的字符串数组，没有任何笔记在用的标签根本不存在。
+const tags = ref<string[]>([]);
 const error = ref<string | null>(null);
 let seq = 0;
 
@@ -19,17 +19,19 @@ export function useTags() {
       error.value = e.message;
     }
   }
-  async function create(repo: string, name: string) {
-    await api.createTag(repo, name);
+
+  // 改名：to 已存在就是合并，后端不报错；返回受影响的笔记数
+  async function rename(repo: string, from: string, to: string) {
+    const r = await api.renameTag(repo, from, to);
     await load(repo);
+    return r.count;
   }
-  async function rename(repo: string, id: string, name: string) {
-    await api.renameTag(repo, id, name);
+
+  async function remove(repo: string, name: string) {
+    const r = await api.deleteTag(repo, name);
     await load(repo);
+    return r.count;
   }
-  async function remove(repo: string, id: string) {
-    await api.deleteTag(repo, id);
-    await load(repo);
-  }
-  return { tags, error, load, create, rename, remove };
+
+  return { tags, error, load, rename, remove };
 }

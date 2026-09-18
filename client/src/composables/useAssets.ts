@@ -2,6 +2,7 @@ import { ref } from 'vue';
 import * as api from '../api';
 import type { AssetMeta } from '../api';
 
+// 仓库内的附件（只有 ready 的可见）。
 const assets = ref<AssetMeta[]>([]);
 const error = ref<string | null>(null);
 let repo: string | null = null;
@@ -16,7 +17,7 @@ export function useAssets() {
     if (!r) return;
     try {
       const list = (await api.listAssets(r)) || [];
-      if (r !== repo) return; // repo 已切换，丢弃过期结果
+      if (r !== repo) return; // 仓库已切换，丢弃过期结果
       assets.value = list;
       error.value = null;
     } catch (e: any) {

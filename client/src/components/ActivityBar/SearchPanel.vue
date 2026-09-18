@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// 全局搜索面板：VSC 命令面板风格。笔记走服务端 FTS，标签/附件客户端匹配。
+// 全局搜索面板：VSC 命令面板风格。笔记走服务端 FTS，标签/附件在客户端匹配已加载的列表。
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import * as api from '../../api';
-import type { Note, Tag, AssetMeta } from '../../api';
+import type { AssetMeta, Note } from '../../api';
 import { useCurrentRepo } from '../../composables/useCurrentRepo';
 import { useTags } from '../../composables/useTags';
 import { useAssets } from '../../composables/useAssets';
@@ -18,14 +18,18 @@ const { assets, load: loadAssets } = useAssets();
 
 const repoId = computed(() => current.value?.id);
 
-type Result = { type: 'note' | 'tag' | 'asset'; item: Note | Tag | AssetMeta; match: string };
+// 标签不是实体，没有 id —— 筛选直接按名字
+type Result =
+  | { type: 'note'; item: Note; match: string }
+  | { type: 'tag'; item: string; match: string }
+  | { type: 'asset'; item: AssetMeta; match: string };
 
 const query = ref('');
 const inputEl = ref<HTMLInputElement>();
 const results = ref<Result[]>([]);
 const selectedIndex = ref(0);
 const loading = ref(false);
-const tagFilter = ref<Tag | null>(null);
+const tagFilter = ref<string | null>(null);
 
 let seq = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -66,7 +70,7 @@ async function load() {
 
   if (tagFilter.value) {
     try {
-      const notes = await api.listNotes(rid, { tag_id: tagFilter.value.id });
+      const notes = await api.listNotes(rid, { tag: tagFilter.value, limit: 1000 });
       if (s !== seq) return;
       for (const n of notes) r.push({ type: 'note', item: n, match: n.title || '(无标题)' });
     } catch {
@@ -74,6 +78,7 @@ async function load() {
     }
   } else {
     const q = query.value.trim();
+    // trigram 分词对 2 字符返回空结果，所以短查询直接不查（spec/api.md 的 q）
     if (q.length < 3) {
       if (s === seq) {
         results.value = [];
@@ -82,14 +87,14 @@ async function load() {
       return;
     }
     try {
-      const notes = await api.listNotes(rid, { q });
+      const notes = await api.listNotes(rid, { q, limit: 1000 });
       if (s !== seq) return;
       for (const n of notes) r.push({ type: 'note', item: n, match: n.title || '(无标题)' });
     } catch {
       if (s !== seq) return;
     }
     const lower = q.toLowerCase();
-    for (const t of tags.value) if (t.name.toLowerCase().includes(lower)) r.push({ type: 'tag', item: t, match: '#' + t.name });
+    for (const t of tags.value) if (t.toLowerCase().includes(lower)) r.push({ type: 'tag', item: t, match: '#' + t });
     for (const a of assets.value) if (a.name.toLowerCase().includes(lower)) r.push({ type: 'asset', item: a, match: a.name });
   }
 
@@ -116,22 +121,18 @@ watch(tagFilter, () => load());
 
 function select(r: Result) {
   if (r.type === 'note') {
-    props.onSelectNote(r.item as Note);
+    props.onSelectNote(r.item);
     props.onClose();
     return;
   }
   if (r.type === 'tag') {
-    tagFilter.value = r.item as Tag;
+    tagFilter.value = r.item;
     query.value = '';
     return;
   }
-  if (r.type === 'asset') {
-    const rid = repoId.value;
-    if (rid) {
-      navigator.clipboard?.writeText(api.assetURL(rid, (r.item as AssetMeta).id)).catch(() => {});
-    }
-    props.onClose();
-  }
+  const rid = repoId.value;
+  if (rid) navigator.clipboard?.writeText(api.assetURL(rid, r.item.id)).catch(() => {});
+  props.onClose();
 }
 
 function clearTagFilter() {
@@ -142,6 +143,10 @@ function clearTagFilter() {
 
 function onBackdropClick(e: MouseEvent) {
   if (e.target === e.currentTarget) props.onClose();
+}
+
+function keyOf(r: Result) {
+  return r.type + (r.type === 'tag' ? r.item : r.item.id);
 }
 </script>
 
@@ -154,7 +159,7 @@ function onBackdropClick(e: MouseEvent) {
       </div>
 
       <div v-if="tagFilter" class="tag-filter">
-        <span>标签 #{{ tagFilter.name }} 的笔记</span>
+        <span>标签 #{{ tagFilter }} 的笔记</span>
         <button class="link" @click="clearTagFilter">清除</button>
       </div>
 
@@ -162,9 +167,15 @@ function onBackdropClick(e: MouseEvent) {
       <div v-else-if="!tagFilter && query.trim().length < 3" class="status">输入至少 3 个字符开始搜索</div>
       <div v-else-if="results.length === 0" class="status">没有找到结果</div>
       <ul v-else class="results">
-        <li v-for="(r, i) in results" :key="r.type + (r.item as any).id" :class="{ selected: i === selectedIndex }">
+        <li v-for="(r, i) in results" :key="keyOf(r)" :class="{ selected: i === selectedIndex }">
           <button class="result-btn" @mouseenter="selectedIndex = i" @click="select(r)">
-            <span class="type"><Icon :icon="r.type === 'note' ? 'mdi:file-document-outline' : r.type === 'tag' ? 'mdi:tag' : 'mdi:paperclip'" width="16" height="16" /></span>
+            <span class="type">
+              <Icon
+                :icon="r.type === 'note' ? 'mdi:file-document-outline' : r.type === 'tag' ? 'mdi:tag' : 'mdi:paperclip'"
+                width="16"
+                height="16"
+              />
+            </span>
             <span class="match">{{ r.match }}</span>
           </button>
         </li>
@@ -266,7 +277,7 @@ function onBackdropClick(e: MouseEvent) {
   outline-offset: -2px;
 }
 .type {
-  font-size: 16px;
+  flex-shrink: 0;
 }
 .match {
   flex: 1;

@@ -1,30 +1,48 @@
-// API 客户端：薄封装 fetch，统一错误处理
+// API 客户端：薄封装 fetch。契约见 spec/api.md —— 19 条路由，方法只有 GET / POST。
+//
+// 三条贯穿全篇的约定：
+// - GET 只读，POST 是唯一写入口；POST 按路径形状分新建（集合）/ 更新（资源）/ 动作（资源 + 动词）。
+// - 一律回 JSON body，没有 204；删除类动作回 { id } 作回执。
+// - 列表返回裸数组，不套信封。
 const BASE = "/api";
 
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
+  status: number;
+
+  constructor(status: number, message: string) {
     super(message);
+    this.status = status;
   }
 }
 
-async function request<T>(method: string, path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, { ...opts, method });
-  if (res.status === 204) return undefined as T;
+async function request<T>(path: string, body?: unknown): Promise<T> {
+  const init: RequestInit = { method: body === undefined ? "GET" : "POST" };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(BASE + path, init);
   const text = await res.text();
-  const body = text ? JSON.parse(text) : undefined;
-  if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText);
-  return body as T;
+  let parsed: any;
+  try {
+    parsed = text ? JSON.parse(text) : undefined;
+  } catch {
+    parsed = undefined; // 服务端意外回了非 JSON，按状态码报错即可
+  }
+  if (!res.ok) throw new ApiError(res.status, parsed?.error ?? res.statusText);
+  return parsed as T;
 }
 
-const json = (data: unknown): RequestInit => ({
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(data),
-});
+// 部分更新的 body：只放「要改的字段」。字段缺席 = 不动，显式 null = 各有语义（见 spec）。
+export interface NotePatch {
+  title?: string;
+  content?: string;
+  parent_id?: string | null;
+  tags?: string[];
+  icon?: string | null;
+}
 
-// 类型
+// 类型（见 spec/model.md）
 export interface Repo {
   id: string;
   name: string;
@@ -34,14 +52,12 @@ export interface Note {
   id: string;
   parent_id: string | null;
   title: string;
-  data: string;
-  date: number;
-  deleted_at?: number | null;
-  icon?: string | null;
-}
-export interface Tag {
-  id: string;
-  name: string;
+  content: string;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  tags: string[];
+  icon: string | null;
 }
 export interface AssetMeta {
   id: string;
@@ -50,74 +66,68 @@ export interface AssetMeta {
   size: number;
   date: number;
 }
+export interface Ack {
+  id: string;
+}
+export interface CountAck {
+  count: number;
+}
 
-// Repos
-export const listRepos = () => request<Repo[]>("GET", "/repos");
-export const createRepo = (name: string) => request<Repo>("POST", "/repos", json({ name }));
-export const renameRepo = (id: string, name: string) =>
-  request<Repo>("PATCH", `/repos/${id}`, json({ name }));
-export const deleteRepo = (id: string) => request<void>("DELETE", `/repos/${id}`);
+// —— Repos ——
+export const listRepos = () => request<Repo[]>("/repos");
+export const createRepo = (name: string) => request<Repo>("/repos", { name });
+export const renameRepo = (id: string, name: string) => request<Repo>(`/repos/${id}`, { name });
+export const deleteRepo = (id: string) => request<Ack>(`/repos/${id}/delete`, {});
 
-// Notes
+// —— Notes ——
 export interface ListNotesOpts {
   q?: string;
-  tag_id?: string;
-  parent_id?: string; // 传空串 = 只列根节点；不传 = 全部
+  tag?: string; // 标签名，精确匹配
+  parent_id?: string; // 传空串 = 只根节点；不传 = 全部未删
+  limit?: number;
+  offset?: number;
 }
 export const listNotes = (repo: string, opts: ListNotesOpts = {}) => {
   const p = new URLSearchParams();
   if (opts.q) p.set("q", opts.q);
-  if (opts.tag_id) p.set("tag_id", opts.tag_id);
+  if (opts.tag) p.set("tag", opts.tag);
   if (opts.parent_id !== undefined) p.set("parent_id", opts.parent_id);
-  p.set("limit", "1000");
-  return request<Note[]>("GET", `/repos/${repo}/notes?${p}`);
+  if (opts.limit !== undefined) p.set("limit", String(opts.limit));
+  if (opts.offset !== undefined) p.set("offset", String(opts.offset));
+  const qs = p.toString();
+  return request<Note[]>(`/repos/${repo}/notes${qs ? `?${qs}` : ""}`);
 };
-export const createNote = (repo: string, body: { title: string; data: string; parent_id?: string | null }) =>
-  request<Note>("POST", `/repos/${repo}/notes`, json(body));
-export const updateNote = (repo: string, id: string, body: { title: string; data: string }) =>
-  request<Note>("PUT", `/repos/${repo}/notes/${id}`, json(body));
-// 移动笔记：parent_id 传 null 移到根
-export const moveNote = (repo: string, id: string, parent_id: string | null) =>
-  request<Note>("PATCH", `/repos/${repo}/notes/${id}`, json({ parent_id }));
+export const createNote = (repo: string, body: NotePatch = {}) =>
+  request<Note>(`/repos/${repo}/notes`, body);
+export const getNote = (repo: string, id: string) => request<Note>(`/repos/${repo}/notes/${id}`);
+export const updateNote = (repo: string, id: string, patch: NotePatch) =>
+  request<Note>(`/repos/${repo}/notes/${id}`, patch);
 export const deleteNote = (repo: string, id: string, permanent = false) =>
-  request<void>("DELETE", `/repos/${repo}/notes/${id}${permanent ? "?permanent=1" : ""}`);
-// 还原回收站里的笔记（连同子树）
+  request<Ack>(`/repos/${repo}/notes/${id}/delete`, permanent ? { permanent: true } : {});
 export const restoreNote = (repo: string, id: string) =>
-  request<void>("POST", `/repos/${repo}/notes/${id}/restore`);
-// 回收站：被删除的顶层笔记
-export const listTrash = (repo: string) =>
-  request<Note[]>("GET", `/repos/${repo}/trash`);
-// 设置/清除笔记自定义图标（icon=null 恢复自动匹配）
-export const setNoteIcon = (repo: string, id: string, icon: string | null) =>
-  request<void>("PATCH", `/repos/${repo}/notes/${id}/icon`, json({ icon }));
+  request<Note>(`/repos/${repo}/notes/${id}/restore`, {});
+export const listTrash = (repo: string) => request<Note[]>(`/repos/${repo}/trash`);
 
-// Tags
-export const listTags = (repo: string) => request<Tag[]>("GET", `/repos/${repo}/tags`);
-export const createTag = (repo: string, name: string) =>
-  request<Tag>("POST", `/repos/${repo}/tags`, json({ name }));
-export const renameTag = (repo: string, id: string, name: string) =>
-  request<Tag>("PUT", `/repos/${repo}/tags/${id}`, json({ name }));
-export const deleteTag = (repo: string, id: string) =>
-  request<void>("DELETE", `/repos/${repo}/tags/${id}`);
+// —— Tags（标签不是实体，没有 id，也没有「新建标签」）——
+export const listTags = (repo: string) => request<string[]>(`/repos/${repo}/tags`);
+export const renameTag = (repo: string, from: string, to: string) =>
+  request<CountAck>(`/repos/${repo}/tags/rename`, { from, to });
+export const deleteTag = (repo: string, name: string) =>
+  request<CountAck>(`/repos/${repo}/tags/delete`, { name });
 
-// Note-Tag
-export const listNoteTags = (repo: string, noteId: string) =>
-  request<Tag[]>("GET", `/repos/${repo}/notes/${noteId}/tags`);
-export const addNoteTag = (repo: string, noteId: string, tagId: string) =>
-  request<void>("POST", `/repos/${repo}/notes/${noteId}/tags`, json({ tag_id: tagId }));
-export const removeNoteTag = (repo: string, noteId: string, tagId: string) =>
-  request<void>("DELETE", `/repos/${repo}/notes/${noteId}/tags/${tagId}`);
-
-// Assets（仓库内私有）
+// —— Assets ——
 export const assetURL = (repo: string, sha: string, inline = false) =>
   `/api/repos/${repo}/assets/${sha}${inline ? "?inline=1" : ""}`;
 
-export const listAssets = (repo: string) =>
-  request<AssetMeta[]>("GET", `/repos/${repo}/assets`);
+export const listAssets = (repo: string) => request<AssetMeta[]>(`/repos/${repo}/assets`);
+// 秒传探测：404 = 没有这份内容，200 = 有（且拿到服务端权威元数据）
+export const assetMeta = (repo: string, sha: string) =>
+  request<AssetMeta>(`/repos/${repo}/assets/${sha}/meta`);
 export const deleteAsset = (repo: string, sha: string) =>
-  request<void>("DELETE", `/repos/${repo}/assets/${sha}`);
+  request<Ack>(`/repos/${repo}/assets/${sha}/delete`, {});
 
-// 上传：客户端算 sha256，HEAD 检测秒传，POST 用 XHR 以便回报进度
+// 上传：客户端算 sha256 → GET meta 探秒传 → 未命中才 POST 原始字节。
+// 用 XHR 是为了拿上传进度（fetch 没有上传进度事件）。
 export async function uploadAsset(
   repo: string,
   file: File,
@@ -126,15 +136,16 @@ export async function uploadAsset(
   const buf = await file.arrayBuffer();
   const hash = await crypto.subtle.digest("SHA-256", buf);
   const sha = bytesToHex(new Uint8Array(hash));
-  const url = assetURL(repo, sha);
 
-  if ((await fetch(url, { method: "HEAD" })).status === 200) {
-    return { id: sha, name: file.name, mime: file.type, size: file.size, date: Date.now() };
+  try {
+    return await assetMeta(repo, sha); // 秒传：服务端已有这份内容，一个字节都不用传
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.status !== 404) throw e;
   }
 
   return new Promise<AssetMeta>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
+    xhr.open("POST", assetURL(repo, sha));
     xhr.setRequestHeader("X-Name", file.name);
     xhr.setRequestHeader("X-Mime", file.type || "application/octet-stream");
     xhr.setRequestHeader("X-Size", String(file.size));
@@ -149,7 +160,7 @@ export async function uploadAsset(
         try {
           msg = JSON.parse(xhr.responseText).error ?? msg;
         } catch {
-          /* noop */
+          /* 非 JSON 错误体，用状态文本 */
         }
         reject(new ApiError(xhr.status, msg));
       }

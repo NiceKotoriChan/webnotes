@@ -142,11 +142,11 @@ func (a *Store) List(db *sql.DB) ([]Metadata, error) {
 	return out, rows.Err()
 }
 
-// Metadata 返回单条元数据；不存在返回 (nil, nil)
+// Metadata 返回单条 ready 附件的元数据；不存在（或还没 ready）返回 (nil, nil)
 func (a *Store) Metadata(db *sql.DB, id string) (*Metadata, error) {
 	var m Metadata
 	err := db.QueryRow(
-		`SELECT id, name, mime, size, date FROM assets WHERE id = ?`, id,
+		`SELECT id, name, mime, size, date FROM assets WHERE id = ? AND status = 'ready'`, id,
 	).Scan(&m.ID, &m.Name, &m.Mime, &m.Size, &m.Date)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
