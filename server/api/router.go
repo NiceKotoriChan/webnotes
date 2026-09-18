@@ -9,17 +9,19 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"webnotes/server/asset"
+	"webnotes/server/icons"
 	"webnotes/server/store"
 )
 
 type Server struct {
 	store  *store.Store
 	assets *asset.Store
+	rules  *icons.Rules
 }
 
-func NewRouter(s *store.Store, a *asset.Store) *gin.Engine {
+func NewRouter(s *store.Store, a *asset.Store, ru *icons.Rules) *gin.Engine {
 	r := gin.Default()
-	srv := &Server{store: s, assets: a}
+	srv := &Server{store: s, assets: a, rules: ru}
 
 	g := r.Group("/api")
 	{
@@ -57,6 +59,10 @@ func NewRouter(s *store.Store, a *asset.Store) *gin.Engine {
 		g.POST("/repos/:repo/assets/:sha", srv.uploadAsset)
 		g.GET("/repos/:repo/assets/:sha", srv.getAsset)
 		g.DELETE("/repos/:repo/assets/:sha", srv.deleteAsset)
+
+		// 图标规则（全局，不属任何仓库；读走 /icons/mdi_rules_custom.json）
+		g.POST("/icons/rules", srv.saveRules)
+		g.POST("/icons/rules/reset", srv.resetRules)
 	}
 	return r
 }
